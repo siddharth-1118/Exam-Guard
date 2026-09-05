@@ -1,0 +1,8 @@
+-- Phase 4B: transport-level publisher lifecycle event types (distinct from the
+-- Phase 4A control-plane MEDIA_* events so audits never conflate the two).
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_CONNECTING';
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_CONNECTED';
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_RECONNECTING';
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_RECONNECTED';
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_DISCONNECTED';
+ALTER TYPE "ProctoringEventType" ADD VALUE IF NOT EXISTS 'MEDIA_PUBLISHER_FAILED';

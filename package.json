@@ -1,0 +1,29 @@
+{
+  "name": "examguard",
+  "version": "0.1.0",
+  "private": true,
+  "description": "ExamGuard — secure online examination, lockdown & live proctoring platform",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --parallel --filter @examguard/api --filter @examguard/admin-web --filter @examguard/student-web --filter @examguard/monitor-web dev",
+    "dev:api": "pnpm --filter @examguard/api dev",
+    "dev:admin": "pnpm --filter @examguard/admin-web dev",
+    "dev:student": "pnpm --filter @examguard/student-web dev",
+    "dev:monitor": "pnpm --filter @examguard/monitor-web dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm --filter @examguard/api test",
+    "test:e2e": "pnpm --filter @examguard/api test:e2e",
+    "db:migrate": "pnpm --filter @examguard/database db:migrate",
+    "db:seed": "pnpm --filter @examguard/database db:seed"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.23.1",
+    "embedded-postgres": "18.4.0-beta.17",
+    "pg": "^8.23.0",
+    "typescript": "^5.6.3"
+  },
+  "packageManager": "pnpm@11.25.0"
+}

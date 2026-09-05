@@ -1,0 +1,17 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "target": "ES2022",
+    "declaration": false,
+    "outDir": "./dist",
+    "baseUrl": "./",
+    "incremental": true,
+    "strict": true,
+    "noImplicitOverride": true,
+    "types": ["node", "jest"],
+    "sourceMap": true
+  },
+  "include": ["src", "test"],
+  "exclude": ["node_modules", "dist"]
+}

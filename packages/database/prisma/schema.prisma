@@ -1,0 +1,853 @@
+// ExamGuard — PostgreSQL schema (spec §27-§28)
+// UUID PKs; organization_id on every multi-tenant table.
+// See docs/DATABASE.md for relationships and status machines.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Enums
+// ---------------------------------------------------------------------------
+
+enum RoleName {
+  SUPER_ADMIN
+  ORG_ADMIN
+  EXAM_MANAGER
+  MONITOR
+  STUDENT
+}
+
+enum ExamStatus {
+  DRAFT
+  SCHEDULED
+  OPEN
+  CLOSED
+}
+
+enum AttemptStatus {
+  CREATED
+  READY
+  ACTIVE
+  PAUSED
+  SUBMITTED
+  AUTO_SUBMITTED
+  TERMINATED
+  DISCONNECTED
+  UNDER_REVIEW
+}
+
+enum QuestionType {
+  SINGLE_CHOICE
+  MULTIPLE_CHOICE
+  TRUE_FALSE
+  SHORT_ANSWER
+  LONG_ANSWER
+  NUMERIC
+  CODE
+}
+
+enum Difficulty {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum ClipboardPolicy {
+  ALLOW
+  BLOCK
+  NOTIFY
+}
+
+enum FullScreenPolicy {
+  REQUIRED
+  RECOMMENDED
+  NOT_REQUIRED
+}
+
+enum AppSwitchPolicy {
+  BLOCK
+  DETECT
+  ALLOW
+}
+
+enum MultipleFacePolicy {
+  ALERT
+  BLOCK
+  ALLOW
+}
+
+enum EvidencePolicy {
+  NONE
+  EVENT_ONLY
+  FULL_RECORDING
+}
+
+enum ProctoringEventType {
+  FACE_DETECTED
+  FACE_MISSING
+  MULTIPLE_FACES
+  FACE_PARTIALLY_VISIBLE
+  CAMERA_BLOCKED
+  CAMERA_CONNECTED
+  CAMERA_DISCONNECTED
+  CAMERA_PERMISSION_GRANTED
+  CAMERA_PERMISSION_DENIED
+  CAMERA_PERMISSION_REVOKED
+  CAMERA_DEVICE_CHANGED
+  MIC_CONNECTED
+  MIC_DISCONNECTED
+  MIC_MUTED
+  MIC_UNMUTED
+  MIC_PERMISSION_GRANTED
+  MIC_PERMISSION_DENIED
+  MIC_PERMISSION_REVOKED
+  AUDIO_LEVEL
+  SCREEN_CAPTURE_STARTED
+  SCREEN_CAPTURE_STOPPED
+  SCREEN_PERMISSION_GRANTED
+  SCREEN_PERMISSION_DENIED
+  SCREEN_PERMISSION_REVOKED
+  DISPLAY_CHANGED
+  MULTIPLE_DISPLAY_DETECTED
+  EXAM_WINDOW_LOST_FOCUS
+  EXAM_WINDOW_FOCUS_RESTORED
+  NETWORK_LOST
+  NETWORK_RESTORED
+  MEDIA_SESSION_CREATED
+  MEDIA_CONNECTED
+  MEDIA_DISCONNECTED
+  MEDIA_RECONNECTING
+  MEDIA_RECONNECTED
+  MEDIA_FAILED
+  MEDIA_PUBLISHER_CONNECTING
+  MEDIA_PUBLISHER_CONNECTED
+  MEDIA_PUBLISHER_RECONNECTING
+  MEDIA_PUBLISHER_RECONNECTED
+  MEDIA_PUBLISHER_DISCONNECTED
+  MEDIA_PUBLISHER_FAILED
+  TRACK_PUBLISHED
+  TRACK_UNPUBLISHED
+}
+
+enum AiEventType {
+  FACE_MISSING
+  MULTIPLE_FACES
+  PHONE_DETECTED
+  BOOK_DETECTED
+  PAPER_DETECTED
+  SECOND_PERSON
+  CAMERA_BLOCKED
+  LOOKING_AWAY
+  UNAUTHORIZED_OBJECT
+  ENVIRONMENT_CHANGE
+  FACE_PARTIALLY_VISIBLE
+}
+
+enum Severity {
+  INFO
+  WARNING
+  CRITICAL
+}
+
+enum RiskLevel {
+  NORMAL
+  LOW_CONCERN
+  SUSPICIOUS
+  CRITICAL
+}
+
+enum AiEventStatus {
+  PENDING
+  DISMISSED
+  CONFIRMED
+  FLAGGED
+}
+
+enum MonitorActionType {
+  PAUSE
+  RESUME
+  TERMINATE
+  MESSAGE
+  FLAG
+  NOTE
+}
+
+enum MediaSessionStatus {
+  CONNECTING
+  ACTIVE
+  PAUSED
+  ENDED
+  FAILED
+}
+
+enum DeviceSessionStatus {
+  ACTIVE
+  DISCONNECTED
+  ENDED
+}
+
+enum MediaParticipantStatus {
+  CONNECTING
+  ACTIVE
+  RECONNECTING
+  DISCONNECTED
+  ENDED
+  FAILED
+}
+
+enum RecordingKind {
+  CAMERA
+  MICROPHONE
+  SCREEN
+  COMBINED
+}
+
+enum RecordingStatus {
+  PENDING
+  RECORDING
+  FINALIZING
+  READY
+  FAILED
+  DELETED
+}
+
+enum EvidenceKind {
+  SNAPSHOT
+  SCREENSHOT
+  CLIP
+}
+
+enum NotificationType {
+  INFO
+  WARNING
+  ALERT
+  SYSTEM
+}
+
+// ---------------------------------------------------------------------------
+// RBAC (spec §27: roles, permissions, role_permissions, user_roles)
+// ---------------------------------------------------------------------------
+
+model Role {
+  id                    String                 @id @default(uuid())
+  name                  RoleName               @unique
+  description           String?
+  permissions           RolePermission[]
+  userRoles             UserRole[]
+  organizationMembers   OrganizationMember[]
+  createdAt             DateTime               @default(now())
+  updatedAt             DateTime               @updatedAt
+}
+
+model Permission {
+  id          String           @id @default(uuid())
+  name        String           @unique
+  description String?
+  resource    String
+  rolePerms   RolePermission[]
+}
+
+model RolePermission {
+  id           String   @id @default(uuid())
+  roleId       String
+  permissionId String
+  role         Role     @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission   Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@unique([roleId, permissionId])
+}
+
+// ---------------------------------------------------------------------------
+// Identity & organizations
+// ---------------------------------------------------------------------------
+
+model User {
+  id            String               @id @default(uuid())
+  email         String               @unique
+  passwordHash  String
+  firstName     String
+  lastName      String
+  isActive      Boolean              @default(true)
+  tokenVersion  Int                  @default(0)
+  mfaEnabled    Boolean              @default(false)
+  lastLoginAt   DateTime?
+  roles         UserRole[]
+  memberships   OrganizationMember[]
+  student       Student?
+  monitor       Monitor?
+  auditLogs     AuditLog[]           @relation("AuditActor")
+  monitorActions MonitorAction[]
+  messagesSent  Message[]            @relation("MessageFrom")
+  messagesReceived Message[]          @relation("MessageTo")
+  notifications Notification[]
+  createdAt     DateTime             @default(now())
+  updatedAt     DateTime             @updatedAt
+
+  @@index([email])
+}
+
+model UserRole {
+  id     String @id @default(uuid())
+  userId String
+  roleId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role   Role   @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, roleId])
+}
+
+model Organization {
+  id        String               @id @default(uuid())
+  name      String
+  slug      String               @unique
+  plan      String               @default("free")
+  status    String               @default("ACTIVE")
+  settings  Json?
+  members             OrganizationMember[]
+  students            Student[]
+  monitors            Monitor[]
+  exams               Exam[]
+  banks               QuestionBank[]
+  auditLogs           AuditLog[]
+  mediaParticipants   MediaParticipant[]
+  recordings          Recording[]
+  createdBy String?
+  createdAt DateTime             @default(now())
+  updatedAt DateTime             @updatedAt
+
+  @@index([slug])
+}
+
+model OrganizationMember {
+  id             String       @id @default(uuid())
+  organizationId String
+  userId         String
+  roleId         String
+  isActive       Boolean      @default(true)
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role           Role         @relation(fields: [roleId], references: [id])
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@unique([organizationId, userId])
+  @@index([userId])
+}
+
+model Student {
+  id             String           @id @default(uuid())
+  studentCode    String
+  organizationId String
+  userId         String           @unique
+  isActive       Boolean          @default(true)
+  organization   Organization     @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments    ExamAssignment[]
+  attempts       ExamAttempt[]
+  devices        DeviceSession[]
+  mediaParticipants MediaParticipant[]
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@unique([organizationId, studentCode])
+  @@index([organizationId])
+}
+
+model Monitor {
+  id             String                  @id @default(uuid())
+  organizationId String
+  userId         String                  @unique
+  isActive       Boolean                 @default(true)
+  organization   Organization            @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  assignments    ExamMonitorAssignment[]
+  createdAt      DateTime                @default(now())
+  updatedAt      DateTime                @updatedAt
+
+  @@index([organizationId])
+}
+
+// ---------------------------------------------------------------------------
+// Exams
+// ---------------------------------------------------------------------------
+
+model Exam {
+  id                        String                    @id @default(uuid())
+  organizationId            String
+  name                      String
+  description               String?
+  instructions              String?
+  startAt                   DateTime?
+  endAt                     DateTime?
+  durationMinutes           Int                       @default(60)
+  maxAttempts               Int                       @default(1)
+  shuffleQuestions          Boolean                   @default(false)
+  shuffleOptions            Boolean                   @default(false)
+  negativeMarkingEnabled    Boolean                   @default(false)
+  negativeMarkingValue      Float                     @default(0.25)
+  passingScore              Float                     @default(40)
+  autoSubmit                Boolean                   @default(true)
+  status                    ExamStatus                @default(DRAFT)
+  organization              Organization              @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  createdBy                 String?
+  settings                  ExamSettings?
+  questions                 ExamQuestion[]
+  assignments               ExamAssignment[]
+  monitorAssignments        ExamMonitorAssignment[]
+  attempts                  ExamAttempt[]
+  mediaParticipants         MediaParticipant[]
+  recordings                Recording[]
+  createdAt                 DateTime                  @default(now())
+  updatedAt                 DateTime                  @updatedAt
+
+  @@index([organizationId, status])
+  @@index([organizationId, startAt])
+}
+
+model ExamSettings {
+  id                          String               @id @default(uuid())
+  examId                      String               @unique
+  cameraRequired              Boolean              @default(true)
+  microphoneRequired          Boolean              @default(true)
+  screenMonitoringRequired    Boolean              @default(true)
+  identityVerificationRequired Boolean             @default(true)
+  aiProctoringEnabled         Boolean              @default(true)
+  clipboardPolicy             ClipboardPolicy      @default(BLOCK)
+  fullScreenPolicy            FullScreenPolicy     @default(REQUIRED)
+  appSwitchPolicy             AppSwitchPolicy      @default(BLOCK)
+  multipleFacePolicy          MultipleFacePolicy   @default(ALERT)
+  phoneObjectDetection        Boolean              @default(true)
+  allowOfflineMode            Boolean              @default(true)
+  evidencePolicy              EvidencePolicy       @default(EVENT_ONLY)
+  retentionDays               Int                  @default(90)
+  extra                       Json?
+  riskWeights                 Json?
+  exam                        Exam                 @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// Questions & question bank
+// ---------------------------------------------------------------------------
+
+model QuestionBank {
+  id             String       @id @default(uuid())
+  name           String
+  description    String?
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  questions      Question[]
+  createdBy      String?
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([organizationId])
+}
+
+model Question {
+  id             String           @id @default(uuid())
+  organizationId String
+  bankId         String?
+  bank           QuestionBank?    @relation(fields: [bankId], references: [id], onDelete: SetNull)
+  type           QuestionType
+  text           String
+  marks          Float            @default(1)
+  negativeMarks  Float            @default(0)
+  difficulty     Difficulty       @default(MEDIUM)
+  metadata       Json? // e.g. { language: "java", tolerance: 0.001 } for NUMERIC/CODE
+  options        QuestionOption[]
+  examQuestions  ExamQuestion[]
+  createdBy      String?
+  createdAt      DateTime         @default(now())
+  updatedAt      DateTime         @updatedAt
+
+  @@index([organizationId, type])
+  @@index([bankId])
+}
+
+model QuestionOption {
+  id         String   @id @default(uuid())
+  questionId String
+  text       String
+  isCorrect  Boolean  @default(false)
+  order      Int      @default(0)
+  question   Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@index([questionId])
+}
+
+model ExamQuestion {
+  id            String   @id @default(uuid())
+  examId        String
+  questionId    String
+  order         Int      @default(0)
+  marksOverride Float?
+  exam          Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  question      Question @relation(fields: [questionId], references: [id], onDelete: Cascade)
+
+  @@unique([examId, questionId])
+  @@index([questionId])
+}
+
+// ---------------------------------------------------------------------------
+// Assignments
+// ---------------------------------------------------------------------------
+
+model ExamAssignment {
+  id            String    @id @default(uuid())
+  examId        String
+  studentId     String
+  assignedById  String?
+  exam          Exam      @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student       Student   @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([examId, studentId])
+  @@index([studentId])
+}
+
+model ExamMonitorAssignment {
+  id        String   @id @default(uuid())
+  examId    String
+  monitorId String
+  exam      Exam     @relation(fields: [examId], references: [id], onDelete: Cascade)
+  monitor   Monitor  @relation(fields: [monitorId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([examId, monitorId])
+  @@index([monitorId])
+}
+
+// ---------------------------------------------------------------------------
+// Attempts, answers, timing (server-authoritative, spec §38)
+// ---------------------------------------------------------------------------
+
+model ExamAttempt {
+  id                          String               @id @default(uuid())
+  examId                      String
+  studentId                   String
+  organizationId              String
+  status                      AttemptStatus        @default(CREATED)
+  startedAt                   DateTime?
+  submittedAt                 DateTime?
+  pausedAt                    DateTime? // set while PAUSED; pause is server-enforced
+  accumulatedPausedSeconds    Int                  @default(0)
+  score                       Float?
+  scoreGraded                 Boolean              @default(false)
+  autoSubmitted               Boolean              @default(false)
+  timeExpired                 Boolean              @default(false)
+  consent                     Json?
+  deviceSessionId             String?
+  exam                        Exam                 @relation(fields: [examId], references: [id], onDelete: Cascade)
+  student                     Student              @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  answers                     Answer[]
+  deviceSession               DeviceSession?
+  cameraSession               CameraSession?
+  microphoneSession           MicrophoneSession?
+  screenSession               ScreenSession?
+  mediaParticipant            MediaParticipant?
+  proctoringEvents            ProctoringEvent[]
+  aiEvents                    AiEvent[]
+  riskScores                  RiskScore[]
+  monitorActions              MonitorAction[]
+  messages                    Message[]
+  recordings                  Recording[]
+  evidence                    Evidence[]
+  createdAt                   DateTime             @default(now())
+  updatedAt                   DateTime             @updatedAt
+
+  @@unique([examId, studentId, status]) // one active attempt per student per exam
+  @@index([organizationId, status])
+  @@index([studentId])
+  @@index([examId, status])
+}
+
+model Answer {
+  id                 String      @id @default(uuid())
+  attemptId          String
+  questionId         String
+  value              Json
+  isFinal            Boolean     @default(false)
+  syncedFromOffline  Boolean     @default(false)
+  attempt            ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  @@unique([attemptId, questionId])
+  @@index([attemptId])
+}
+
+// ---------------------------------------------------------------------------
+// Devices & media sessions
+// ---------------------------------------------------------------------------
+
+model DeviceSession {
+  id            String             @id @default(uuid())
+  attemptId     String             @unique
+  studentId     String
+  organizationId String
+  os            String?
+  appVersion    String?
+  deviceInfo    Json?
+  status        DeviceSessionStatus @default(ACTIVE)
+  startedAt     DateTime           @default(now())
+  endedAt       DateTime?
+  lastSignalAt  DateTime           @default(now())
+  attempt       ExamAttempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  student       Student            @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId])
+  @@index([lastSignalAt])
+}
+
+model CameraSession {
+  id           String            @id @default(uuid())
+  attemptId    String            @unique
+  status       MediaSessionStatus @default(CONNECTING)
+  startedAt    DateTime?
+  endedAt      DateTime?
+  lastSignalAt DateTime?
+  muted        Boolean           @default(false)
+  attempt      ExamAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([lastSignalAt])
+}
+
+model MicrophoneSession {
+  id           String            @id @default(uuid())
+  attemptId    String            @unique
+  status       MediaSessionStatus @default(CONNECTING)
+  startedAt    DateTime?
+  endedAt      DateTime?
+  lastSignalAt DateTime?
+  muted        Boolean           @default(false)
+  audioLevel   Float             @default(0)
+  attempt      ExamAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([lastSignalAt])
+}
+
+model ScreenSession {
+  id           String            @id @default(uuid())
+  attemptId    String            @unique
+  status       MediaSessionStatus @default(CONNECTING)
+  startedAt    DateTime?
+  endedAt      DateTime?
+  lastSignalAt DateTime?
+  attempt      ExamAttempt       @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([lastSignalAt])
+}
+
+// ---------------------------------------------------------------------------
+// SFU media participant (Phase 4) — one logical participant per attempt.
+// Metadata/state only: no media payloads are ever stored here.
+// ---------------------------------------------------------------------------
+
+model MediaParticipant {
+  id               String                @id @default(uuid())
+  attemptId        String                @unique
+  examId           String
+  studentId        String
+  organizationId   String
+  // PUBLISHER (student) or SUBSCRIBER (monitor); monitors are ephemeral and
+  // are not persisted — this row tracks the attempt's publisher lifecycle.
+  role             String                @default("PUBLISHER")
+  sfuParticipantId String?
+  status           MediaParticipantStatus @default(CONNECTING)
+  reconnects       Int                   @default(0)
+  connectedAt      DateTime?
+  lastSeenAt       DateTime?
+  endedAt          DateTime?
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+  attempt          ExamAttempt           @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  student          Student               @relation(fields: [studentId], references: [id], onDelete: Cascade)
+  exam             Exam                  @relation(fields: [examId], references: [id], onDelete: Cascade)
+  organization     Organization          @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@index([organizationId, status])
+  @@index([examId])
+}
+
+// ---------------------------------------------------------------------------
+// Proctoring events, AI events, risk
+// ---------------------------------------------------------------------------
+
+model ProctoringEvent {
+  id            String             @id @default(uuid())
+  attemptId     String
+  studentId     String
+  examId        String
+  organizationId String
+  type          ProctoringEventType
+  severity      Severity           @default(INFO)
+  detail        Json?
+  capturedAt    DateTime           @default(now())
+  evidenceId    String?
+  // Client-generated idempotency key (desktop event queue replays on network
+  // failure); NULLs remain distinct so events without one are unaffected.
+  clientEventId String?            @unique
+  attempt       ExamAttempt        @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId, capturedAt])
+  @@index([organizationId, capturedAt])
+}
+
+model AiEvent {
+  id            String        @id @default(uuid())
+  attemptId     String
+  eventType     AiEventType
+  confidence    Float
+  evidenceRef   String?
+  status        AiEventStatus @default(PENDING)
+  modelVersion  String?
+  capturedAt    DateTime      @default(now())
+  reviewedBy    String?
+  reviewedAt    DateTime?
+  attempt       ExamAttempt   @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId, status])
+  @@index([status, capturedAt])
+}
+
+model RiskScore {
+  id             String    @id @default(uuid())
+  attemptId      String
+  score          Int
+  level          RiskLevel
+  configSnapshot Json?
+  computedAt     DateTime  @default(now())
+  attempt        ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId, computedAt])
+}
+
+// ---------------------------------------------------------------------------
+// Interventions, messaging
+// ---------------------------------------------------------------------------
+
+model MonitorAction {
+  id          String            @id @default(uuid())
+  monitorId   String
+  studentId   String
+  examId      String
+  attemptId   String?
+  action      MonitorActionType
+  reason      String?
+  payload     Json?
+  monitor     User              @relation(fields: [monitorId], references: [id])
+  attempt     ExamAttempt?      @relation(fields: [attemptId], references: [id], onDelete: SetNull)
+  createdAt   DateTime          @default(now())
+
+  @@index([attemptId, createdAt])
+  @@index([monitorId, createdAt])
+}
+
+model Message {
+  id          String   @id @default(uuid())
+  attemptId   String
+  fromUserId  String?
+  toUserId    String
+  content     String
+  kind        String   @default("CUSTOM") // PREDEFINED | CUSTOM | SYSTEM
+  deliveredAt DateTime?
+  attempt     ExamAttempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  from        User?    @relation("MessageFrom", fields: [fromUserId], references: [id])
+  to          User     @relation("MessageTo", fields: [toUserId], references: [id])
+  createdAt   DateTime @default(now())
+
+  @@index([attemptId])
+}
+
+// ---------------------------------------------------------------------------
+// Recordings & evidence (spec §25)
+// ---------------------------------------------------------------------------
+
+model Recording {
+  id              String          @id @default(uuid())
+  organizationId  String
+  examId          String
+  attemptId       String
+  // Optional media participant (publisher session) this recording belongs to.
+  // Stored by value (not a FK) so recording metadata never blocks SFU cleanup.
+  participantId   String?
+  kind            RecordingKind
+  status          RecordingStatus @default(PENDING)
+  // Server-generated, tenant-scoped object key (never client-supplied).
+  storageKey      String
+  sizeBytes       BigInt?         // actual object size at finalize (bytes)
+  durationMs      Int?            // actual captured duration at finalize
+  checksumSha256  String?         // integrity digest computed at finalize
+  startedAt       DateTime?
+  endedAt         DateTime?
+  failureReason   String?
+  retentionUntil  DateTime?
+  createdBy       String?         // actor userId or null for server-initiated
+  attempt         ExamAttempt     @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  organization    Organization    @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  exam            Exam            @relation(fields: [examId], references: [id], onDelete: Cascade)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([organizationId, status])
+  @@index([attemptId])
+  @@index([examId, status])
+}
+
+model Evidence {
+  id          String       @id @default(uuid())
+  attemptId   String
+  eventId     String?
+  kind        EvidenceKind
+  storageRef  String
+  capturedAt  DateTime     @default(now())
+  attempt     ExamAttempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+
+  @@index([attemptId])
+}
+
+// ---------------------------------------------------------------------------
+// Audit & notifications
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id           String         @id @default(uuid())
+  organizationId String?
+  actorUserId  String?
+  actorEmail   String?
+  action       String
+  resourceType String?
+  resourceId   String?
+  detail       Json?
+  ip           String?
+  userAgent    String?
+  createdAt    DateTime       @default(now())
+  organization Organization?  @relation(fields: [organizationId], references: [id], onDelete: SetNull)
+  actor        User?          @relation("AuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([organizationId, createdAt])
+  @@index([actorUserId, createdAt])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType @default(INFO)
+  title     String
+  body      String?
+  data      Json?
+  readAt    DateTime?
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime         @default(now())
+
+  @@index([userId, readAt])
+}

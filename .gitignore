@@ -1,0 +1,44 @@
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Builds
+dist/
+build/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+
+# Env & secrets
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Logs
+*.log
+npm-debug.log*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+*.swp
+
+# Prisma
+packages/database/prisma/*.db
+
+# Generated
+generated/
+.aider*
+.devdb/
+node_modules/
+dist/
+.next/
+coverage/
+.env
+.env.*
+!.env.example
+dump.rdb
+.freebuff/

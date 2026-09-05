@@ -1,0 +1,96 @@
+import 'server-only';
+import { cookies } from 'next/headers';
+import { ACCESS_COOKIE, REFRESH_COOKIE } from '@examguard/auth';
+
+export const API_URL = process.env.API_URL ?? 'http://localhost:4000';
+
+export class ApiError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function token(): Promise<string | null> {
+  const store = await cookies();
+  return store.get(ACCESS_COOKIE)?.value ?? null;
+}
+
+export async function apiFetch<T = unknown>(
+  path: string,
+  options: { method?: string; body?: unknown; tokenOverride?: string | null } = {},
+): Promise<T> {
+  const t = options.tokenOverride !== undefined ? options.tokenOverride : await token();
+  const headers: Record<string, string> = {};
+  if (t) headers.Authorization = `Bearer ${t}`;
+  if (options.body !== undefined) headers['Content-Type'] = 'application/json';
+
+  const res = await fetch(`${API_URL}${path}`, {
+    method: options.method ?? 'GET',
+    headers,
+    body: options.body !== undefined ? JSON.stringify(options.body) : undefined,
+    cache: 'no-store',
+  });
+  if (!res.ok) {
+    let message = `Request failed (${res.status})`;
+    try {
+      const body = (await res.json()) as { message?: string | string[] };
+      if (Array.isArray(body.message)) message = body.message.join('; ');
+      else if (body.message) message = body.message;
+    } catch {
+      // ignore
+    }
+    throw new ApiError(res.status, message);
+  }
+  if (res.status === 204) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export async function getSessionUser() {
+  try {
+    return await apiFetch<{
+      id: string;
+      email: string;
+      firstName: string;
+      lastName: string;
+      role: string;
+      organizationId: string | null;
+    }>('/api/v1/auth/me');
+  } catch {
+    return null;
+  }
+}
+
+export async function refreshSession(): Promise<boolean> {
+  const store = await cookies();
+  const refresh = store.get(REFRESH_COOKIE)?.value;
+  if (!refresh) return false;
+  try {
+    const res = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refreshToken: refresh }),
+      cache: 'no-store',
+    });
+    if (!res.ok) return false;
+    const data = (await res.json()) as { accessToken: string; refreshToken: string };
+    store.set(ACCESS_COOKIE, data.accessToken, { httpOnly: true, sameSite: 'lax', path: '/' });
+    store.set(REFRESH_COOKIE, data.refreshToken, { httpOnly: true, sameSite: 'lax', path: '/' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function homeForRole(role: string | undefined): string {
+  switch (role) {
+    case 'MONITOR':
+      return '/monitor';
+    case 'STUDENT':
+      return '/student';
+    default:
+      return '/admin/dashboard';
+  }
+}
