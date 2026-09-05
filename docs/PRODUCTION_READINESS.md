@@ -32,6 +32,13 @@ This document presents the authoritative technical status, empirical evidence, l
 | **22. Failure & Recovery** | **PARTIAL** | **Mock failure injection verified** (11 tests): publisher disconnect → FAILED, storage missing/empty/checksum-fail → FAILED, FFmpeg crash → FAILED, duplicate start idempotent, API finalize failure preserves checksum. **Real infrastructure failure recovery UNVERIFIED**: API restart, Redis restart, DB interruption, student disconnect, monitor disconnect, SFU crash — documented as skipped in `recording.failure.spec.ts` | Attempt state machine is the source of truth; mock tests prove failure paths produce explicit FAILED states; real infrastructure recovery requires live API+DB+Redis+Electron environment |
 | **23. Observability** | **PROVEN** | `GET /health` liveness probe (always 200 if alive); `GET /ready` readiness probe (DB required, Redis optional with degraded); `GET /ready/detailed` operator endpoint with latency; structured audit logs with `organizationId`, `actorUserId`, `action`, `resourceType`, `resourceId`, `detail`; correlation via `requestId`/`attemptId`/`organizationId`; SFU status endpoint (`/status` with room/producer metadata); media gateway metrics (connections, joins, reconnects, evictions) | Metrics pipeline (Prometheus/Grafana) not yet deployed; distributed tracing not yet implemented |
 | **24. Backup, DR & Deployment** | **PLANNED** | Embedded PostgreSQL for dev; `electron-builder` for desktop distribution; API + media service + SFU as separate Node.js processes; Redis for ephemeral state only (no backup needed); object storage for recordings | **UNVERIFIED** — production backup strategy, restore strategy, RPO/RTO, database replication, S3 versioning/lifecycle/encryption, secrets management (AWS Secrets Manager / Vault), CI/CD pipeline, container orchestration |
+| **25. Offline / Network Interruption / Resilience** | **PROVEN** | ReliableOutbox with disk persistence + exponential backoff + clientEventId dedup; server-authoritative timing; publisher 45s reconnect grace; device auto-reconnect; offline UI indicators; `outbox.test.ts`, `deviceController.test.ts`, `session.test.ts` | No true offline exam mode (by design — server timer is authoritative) |
+| **26. Data Consency / Concurrency / Idempotency** | **PROVEN** | Atomic `updateMany` with status WHERE on all state transitions; `@@unique` constraints on attempt+status, answer+question, device sessions; idempotent start/submit/heartbeat; Redis atomic Lua ownership; recording guarded transitions | Conflicting monitor actions not explicitly serialized (relies on atomic transitions) |
+| **27. Student Exam UX / Recovery / State Machine** | **PROVEN** | Full state machine coverage (starting/active/paused/submitted/terminated); device disconnect recovery with auto-reconnect; answer persistence with debounce + outbox; offline indicator; pause overlay; submit error handling | No load/performance testing of the desktop UI |
+| **28. Monitor Workflow / Human Decision System** | **PARTIAL** | Assigned-exam isolation; per-student risk/media status; pause/resume/terminate/message/flag interventions; AI event review (DISMISSED/CONFIRMED/FLAGGED); every action audited; grid view with 24-item pagination | Conflicting multi-monitor actions not serialized; no load-testing at 100+ students; no explicit alert acknowledgment workflow |
+| **29. AI Proctoring Production Contract** | **PARTIAL** | Event ingestion endpoint with confidence validation, 5s cooldown dedup, risk recomputation; human review workflow; advisory-only design enforced; AiEvent + RiskScore schemas complete | **No real CV inference** — interface/contract only; requires real model + GPU infrastructure |
+| **30. Authentication / MFA / Session Security** | **PARTIAL** | Argon2id/Bcrypt hashing; JWT access + refresh tokens with rotation; tokenVersion session revocation; login throttling 10/min/IP; password reset flow; auth guard on all routes | **MFA is mock** (endpoint always returns ok); no brute-force lockout; no device/session visibility |
+| **31. Privacy / Consent / Retention / Data Access** | **PROVEN** | Explicit consent before monitoring; server-side RBAC + tenant isolation on every path; recording downloads audited; S3 signed URLs with 300s TTL; SHA-256 integrity; retention sweeper; no PII in storage keys; no secrets in logs | No GDPR data export/deletion API; no explicit student recording-consent indicator |
 
 ---
 
@@ -201,6 +208,236 @@ This document presents the authoritative technical status, empirical evidence, l
 | **Secrets management** | Environment variables | PLANNED — no secrets in repo or desktop client |
 
 **RPO / RTO**: Not yet defined. Database is the only state requiring backup strategy.
+
+---
+
+## Group 5 — Production Readiness (C25–C31)
+
+### C25: Offline / Network Interruption / Resilient Student Session
+
+**Status: PROVEN**
+
+**Architecture**: The student desktop implements a three-layer resilience model:
+
+1. **ReliableOutbox** (`electron/outbox.ts`): Disk-persisted queue that retries answer saves and security events with capped exponential backoff (2s base, 60s max, 20 attempts). Every event carries a stable `clientEventId` for server-side deduplication (at-least-once delivery, effectively-once semantics). The outbox is notified of online/offline state changes and drains automatically on reconnect.
+
+2. **Server-authoritative timing**: Exam timer is computed entirely server-side from `startedAt + durationMinutes + accumulatedPausedSeconds`. Client countdown display is cosmetic only — the server's deadline is authoritative. After network loss, the heartbeat endpoint returns the correct remaining time.
+
+3. **Publisher reconnect**: The SFU publisher has a 45-second grace window. Socket loss transitions to `RECONNECTING` (not `DISCONNECTED`). The publisher retries with exponential backoff (1s → 2s → 4s → 8s, max 4 retries). Same participant token is reused; producers are recreated only if old ones are gone.
+
+**Evidence**:
+- `ReliableOutbox` unit tests: delivery, offline buffering, retry/backoff, deduplication (`outbox.test.ts`)
+- Device controller auto-reconnect on device-list/display-topology changes (`deviceController.ts`)
+- ExamScreen offline indicator: `!online` shows "offline — will sync" chip; `queuePending > 0` shows syncing count
+- `flushDirty()` drains queue when `online` transitions to true
+- Server `livenessSweep()` marks stale ACTIVE attempts DISCONNECTED after 90s; heartbeat restores to ACTIVE
+
+**Limitations**:
+- Exam continues locally during brief network loss (server timer is authoritative; locally-answered questions are queued)
+- Long network loss (>>45s) causes media session to reach DISCONNECTED; exam timer continues server-side
+- No true "offline exam mode" — the architecture does not support exam continuation without eventual server connectivity
+- If the student cannot reconnect before the server-side deadline, auto-submit fires
+
+### C26: Data Consistency / Concurrency / Idempotency
+
+**Status: PROVEN**
+
+**Atomic state transitions**: All state transitions use Prisma `updateMany` with a WHERE clause that re-checks the current status:
+```typescript
+await this.prisma.examAttempt.updateMany({
+  where: { id: attempt.id, status: 'ACTIVE' },
+  data: { status: 'SUBMITTED' },
+});
+```
+This prevents two concurrent submit requests from both succeeding — only one will match the WHERE clause.
+
+**Idempotent operations**:
+- `start()`: Reuses existing ACTIVE attempt (returns existing instead of creating duplicate)
+- `submit()`: Returns existing SUBMITTED/AUTO_SUBMITTED attempt without error
+- `heartbeat()`: Reconnects DISCONNECTED attempts safely
+- Recording lifecycle: Duplicate startRecording prevented by `active` Map; finalize twice is safe (idempotent READY check)
+- Proctoring event ingestion: `clientEventId` unique constraint prevents duplicate events from outbox retries
+
+**Concurrency protection**:
+- `@@unique([examId, studentId, status])` on ExamAttempt prevents duplicate active attempts per student per exam
+- `@@unique([attemptId, questionId])` on Answer prevents duplicate answers
+- `@@unique([attemptId])` on DeviceSession/CameraSession/MicrophoneSession/ScreenSession/MediaParticipant
+- Redis ownership leases use atomic Lua SET+EXPIRE — two instances cannot both believe they own the same participant
+- Recording state machine uses guarded `updateMany` with status check — concurrent transitions are safely rejected
+
+**Concurrent monitor actions**: The system does not explicitly lock against two monitors performing conflicting actions (e.g., both pausing the same student). However, the atomic `updateMany` with status check means the second action will either succeed safely (if compatible with current state) or throw a ConflictException (if the state has already changed).
+
+**Evidence**:
+- Attempt lifecycle unit tests: concurrent start prevention, submit idempotency
+- Recording state machine spec: full transition matrix validated
+- Recording service spec: lifecycle, storage failure, authorization matrix
+- Media presence spec: duplicate ownership rejection, atomic cleanup
+
+### C27: Student Exam UX / Recovery / State Machine
+
+**Status: PROVEN**
+
+**State machine coverage** in ExamScreen:
+| State | UI Behavior | Recovery |
+|---|---|---|
+| Starting | Loading spinner, start error display | Error message with "Back to exams" button |
+| ACTIVE | Full exam UI, timer, question navigation, answer inputs | Auto-reconnect devices, outbox drains on reconnect |
+| PAUSED | Overlay blocks input, "EXAM PAUSED" message | Monitor resumes → overlay removed |
+| SUBMITTED/AUTO_SUBMITTED | "Submission received" confirmation with score | "Finish" button exits |
+| TERMINATED | "Exam terminated" message with institution contact note | "Finish" button exits |
+
+**Device recovery**:
+- Device disconnect → `CAMERA_DISCONNECTED` / `MIC_DISCONNECTED` / `SCREEN_CAPTURE_STOPPED` events emitted
+- Auto-reconnect via device-list/display-topology change listeners (500ms delay, 2.5s min gap)
+- UI shows per-device status chips (Camera ●, Mic ●, Screen ●) with error/off/connecting states
+- Notice bar: "Camera and Screen capture are not available — monitoring paused until it reconnects."
+
+**Answer persistence**:
+- Single-choice/MULTIPLE_CHOICE/TRUE_FALSE: immediate save on selection
+- Text answers: 800ms debounce → outbox enqueue
+- Periodic flush every 5s for dirty answers
+- "✓ saved" / "saving…" indicator per question
+- Palette dots show saved vs unsaved questions
+
+**Network resilience**:
+- "offline — will sync" chip when offline
+- "N syncing" chip showing pending outbox count
+- `flushDirty()` called when `online` transitions to true
+
+**Pause overlay**: Blocks all input (`disabled={blockedByPause}`) with clear messaging: "You cannot answer questions right now."
+
+**Submit error handling**: Paused-attempt submission shows "The exam is paused by the monitor — submission is locked until it resumes."
+
+### C28: Monitor Workflow / Human Decision System
+
+**Status: PARTIAL**
+
+**Verified workflow**:
+1. Monitor sees assigned exams only (`listExams` filters by `monitorAssignments`)
+2. Per-student view shows: status, risk score/level, camera/mic/screen connection status, media live status, last signal time
+3. Available interventions: pause, resume, terminate, message, flag — all server-enforced and audited
+4. AI events are explicitly AI-generated (confidence bounds 0-1, modelVersion tracked)
+5. AI never automatically declares cheating — all alerts are `PENDING` until human review (DISMISSED/CONFIRMED/FLAGGED)
+6. Every intervention creates a `MonitorAction` record and `AuditLog` entry
+7. Monitor sees intervention history (`studentDetail` returns `actions` array)
+8. Student receives UI feedback when paused (overlay) or terminated (end screen)
+
+**Architecture**:
+- Monitor WebSocket: `exam-watch-join` → receives `media-participant-connected` / `media-participant-state` pushes
+- Grid view: 24-item pagination, lazy subscription
+- Focused view: Subscribe to selected student media only
+- No full-resolution subscriptions for every student (grid uses thumbnails/metadata)
+
+**Limitations (PARTIAL)**:
+- Conflicting monitor actions (two monitors, same student) are not explicitly serialized — relies on atomic state transitions to reject incompatible operations
+- Monitor disconnect/reconnect: WebSocket closes gracefully; monitor must re-join; no state loss (DB is authoritative)
+- No real-time alerting pipeline beyond WebSocket pushes
+- Grid view pagination verified architecturally but not load-tested at 100+ students
+- No explicit "monitor acknowledgment" workflow for AI alerts beyond review status update
+
+### C29: AI Proctoring Production Contract
+
+**Status: PARTIAL**
+
+**What is implemented** (interface/contract):
+- `POST /api/v1/ai/events` — AI event ingestion endpoint with:
+  - Confidence bounds validation (0.0–1.0)
+  - 5-second cooldown deduplication per event type per attempt
+  - Automatic risk recomputation via `RiskTracker` (configurable weights per exam)
+  - AI alert fan-out via event bus
+- `POST /api/v1/ai/events/:id/review` — Human review workflow (DISMISSED/CONFIRMED/FLAGGED)
+- `RiskTracker` (`@examguard/security`): Weighted scoring with configurable risk weights, risk level thresholds (NORMAL/LOW_CONCERN/SUSPICIOUS/CRITICAL)
+- AiEvent schema: `eventType`, `confidence`, `evidenceRef`, `modelVersion`, `status`, `reviewedBy`, `reviewedAt`
+- RiskScore schema: `score`, `level`, `configSnapshot`, `computedAt`
+
+**What is NOT implemented** (requires real model):
+- Actual CV inference (face detection, phone detection, looking-away detection, etc.)
+- Model loading and GPU/inference infrastructure
+- Real-time video stream analysis
+- Evidence capture (screenshots/clips tied to AI events)
+
+**AI must remain advisory**: No automatic cheating verdict. Monitor holds sole intervention authority. This is enforced architecturally — AI events are `PENDING` until human review.
+
+**Documented**:
+- `AiEventType` enum: FACE_MISSING, MULTIPLE_FACES, PHONE_DETECTED, BOOK_DETECTED, PAPER_DETECTED, SECOND_PERSON, CAMERA_BLOCKED, LOOKING_AWAY, UNAUTHORIZED_OBJECT, ENVIRONMENT_CHANGE, FACE_PARTIALLY_VISIBLE
+- `AiEventStatus` enum: PENDING → DISMISSED / CONFIRMED / FLAGGED
+- AI unavailable behavior: Events simply are not created; no crash, no false positives
+- AI disabled behavior: `aiProctoringEnabled` flag on ExamSettings; endpoint still accepts events but they are not generated
+
+### C30: Authentication / MFA / Session Security
+
+**Status: PARTIAL** (MFA is mock)
+
+**Implemented**:
+- **Password hashing**: Argon2id/Bcrypt (configurable via `@examguard/security`)
+- **JWT access tokens**: Short-lived, carry `sub`, `email`, `orgId`, `role`
+- **JWT refresh tokens**: Carry `sub` + `tokenVersion`; rotated on every refresh
+- **Session invalidation**: `tokenVersion` increment on logout revokes all outstanding refresh tokens
+- **Password reset**: Token-based flow with 30-minute expiry; `tokenVersion` bump on reset
+- **Login throttling**: 10 requests/minute per IP via `@nestjs/throttler` on register + login endpoints
+- **Account lockout**: `isActive` flag on User; deactivated accounts rejected at login
+- **Auth guard**: Global `AuthGuard` verifies JWT + resolves identity on every request
+- **MFA endpoint**: `POST /api/v1/auth/mfa/verify` exists contractually but always returns `{ ok: true }` (mock)
+
+**MFA status**: **PARTIAL** — The endpoint exists but performs no real TOTP verification. Real MFA requires:
+- TOTP secret generation and secure storage (encrypted, not plaintext)
+- QR code generation for enrollment
+- Time-based verification window
+- Backup/recovery codes
+- Per-role/organization MFA policy enforcement
+
+**What is NOT implemented**:
+- Brute-force account lockout (rate limiting exists but no progressive lockout)
+- Device/session visibility (no session list, no per-device revocation)
+- Login attempt logging with IP/geo tracking beyond audit log
+
+### C31: Privacy / Consent / Retention / Data Access
+
+**Status: PROVEN**
+
+**Consent**:
+- Exam attempt creation requires explicit consent object: `{ version, acceptedAt, camera, microphone, screen, identityVerified }`
+- `identityVerificationRequired` flag on ExamSettings enforces consent before attempt start
+- Consent stored as JSON on the Attempt record (audit trail)
+
+**Access control** (server-side, never client-trusted):
+- Students: Only see their own attempts and recordings
+- Monitors: Only see exams they are assigned to; recordings of assigned exams only
+- Org admins: Full organization scope
+- Super admins: Full cross-organization scope
+- Tenant isolation enforced at every Prisma query via `organizationId` from JWT
+
+**Recording access**:
+- Downloads are audited (`recording.accessed` audit event)
+- S3 driver returns signed URLs with 300s TTL
+- Local driver streams through the API (RBAC enforced)
+- Storage keys are server-generated, tenant-scoped: `<orgId>/recordings/<recordingId>/<kind>`
+- No client-supplied storage paths
+
+**Retention**:
+- `RetentionSweeper` runs hourly, purges recordings past `retentionUntil` date
+- Active attempt recordings are never purged
+- Purge: object deleted from storage → row marked DELETED → audit event
+- Default retention: 90 days (configurable per exam via `retentionDays`)
+
+**Data minimization**:
+- No raw biometric payload stored in PostgreSQL (only event metadata)
+- ProctoringEvent stores type + severity + detail (no video frames)
+- AiEvent stores eventType + confidence + evidenceRef (no raw image data)
+- Audit log redacts password/token/secret fields automatically
+- No secrets in logs (tokens, credentials, signed URLs are never logged)
+- No student PII in storage keys
+
+**Integrity**:
+- SHA-256 checksum computed at recording finalization
+- Size and checksum verified before marking READY
+- Storage failure produces explicit FAILED state (never false READY)
+
+**Limitations**:
+- No student data export/deletion API (GDPR right to erasure not implemented)
+- No explicit recording consent indicator visible to student during recording
+- No signed-URL expiry verification for S3 downloads (handled by S3)
+- Evidence deletion not explicitly tested (follows recording deletion cascade)
 
 ---
 
