@@ -13,6 +13,7 @@
     "dev:student": "pnpm --filter @examguard/student-web dev",
     "dev:monitor": "pnpm --filter @examguard/monitor-web dev",
     "build": "pnpm -r build",
+    "vercel-build": "cd packages/database && npx prisma generate && cd ../types && pnpm build && cd ../config && pnpm build && cd ../auth && pnpm build && cd ../security && pnpm build && cd ../database && pnpm build && cd ../ui && pnpm build && cd ../../apps/student-web && pnpm build",
     "typecheck": "pnpm -r typecheck",
     "test": "pnpm --filter @examguard/api test",
     "test:e2e": "pnpm --filter @examguard/api test:e2e",
