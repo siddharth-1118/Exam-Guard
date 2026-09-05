@@ -57,14 +57,14 @@ This document presents the authoritative technical status, empirical evidence, l
 | **47. Database Migration Safety** | **PROVEN** | 6 versioned migrations; `prisma migrate deploy` for production; seed guarded by APP_ENV; no silent schema mutation | Migration validation in CI pipeline |
 | **48. Backup / Restore Foundation** | **PARTIAL** | `scripts/db-backup.sh` with timestamped gzip + SHA-256 checksum; restore procedure documented | **BLOCKED** — pg_dump not installed; backup not tested locally |
 | **49. CI Pipeline** | **PARTIAL** | GitHub Actions workflow with 8 parallel jobs; all equivalent local tests pass 236/236; YAML structurally valid; no remote configured | NOT VALIDATED IN GITHUB (no remote) |
-| **50. Prometheus Metrics** | **PARTIAL** | `/metrics` endpoint with Prometheus exposition format; bounded labels; HTTP request metrics, attempt/media/recording gauges, auth/MFA counters | No Grafana dashboards; no Prometheus server deployed |
+| **50. Prometheus Metrics** | **PARTIAL** | `/metrics` endpoint with 22 bounded-label metrics; Prometheus config + Grafana dashboard created; recording/media/AI metrics added | No Prometheus/Grafana actually deployed |
 | **51. Alerting Contract** | **PARTIAL** | `docs/MONITORING.md` with CRITICAL/WARNING alert rules, escalation paths, dashboard recommendations | No actual alerting system connected |
 | **53. Docker Build Validation** | **BLOCKED** | Dockerfiles exist; Docker daemon not running | Cannot validate build/runtime without Docker |
 | **54. Backup / Restore Test** | **BLOCKED** | pg_dump not installed on machine | Cannot test backup/restore locally |
 | **55. CI Pipeline Validation** | **PARTIAL** | YAML valid; all equivalent local tests pass (236/236) | Not validated in actual GitHub Actions |
 | **56. Monitoring Stack** | **PARTIAL** | `/metrics` endpoint ready; `docs/MONITORING.md` defines alerts | No Prometheus/Grafana deployed |
 | **57. Backup Scheduling** | **PARTIAL** | `scripts/db-backup.sh` ready; scheduling depends on deployment platform | No automated schedule configured |
-| **58. Desktop Release Engineering** | **PARTIAL** | electron-builder configured; NSIS/DMG/AppImage targets | No code signing; electron-builder not in devDeps |
+| **58. Desktop Release Engineering** | **PARTIAL** | electron-builder@26.15.3 installed; NSIS installer built (107 MB, unsigned); macOS/Linux require respective OS | No code signing; no auto-update |
 | **59. Release Candidate** | **PARTIAL** | 236/236 tests pass; security scan clean | No full E2E with real hardware media |
 | **52. Production Runbook** | **PARTIAL** | 5 operational docs created | Not validated against real production deployment |
 
@@ -1249,6 +1249,107 @@ gunzip -c backup.sql.gz | psql $DATABASE_URL
 - No Docker image build job (optional/integration)
 
 **Not validated**: Actual GitHub Actions execution (no remote configured).
+
+---
+
+## Group 11 — Monitoring, Recording Storage & Desktop Release (C63–C65)
+
+### C63: Production Monitoring & Alerting
+
+**Status: PARTIAL** (implementation complete, runtime deployment blocked)
+
+**Implementation evidence**:
+
+| Component | Status | Evidence |
+|---|---|---|
+| Metrics service | ✅ Complete | 22 metrics with bounded labels, no high-cardinality PII |
+| Route normalization | ✅ Complete | UUIDs → `:id`, digits → `:id` |
+| Prometheus config | ✅ Created | `monitoring/prometheus/prometheus.yml` |
+| Grafana dashboard | ✅ Created | `monitoring/grafana/dashboards/examguard.json` |
+| Grafana provisioning | ✅ Created | datasource + dashboard provisioning |
+| Alert rules | ✅ Documented | `docs/MONITORING.md` with CRITICAL/WARNING |
+
+**Metrics security review**:
+- No high-cardinality labels (studentId, email, IP, attemptId, recordingId) ✅
+- No JWT secrets in /metrics ✅
+- No passwords in /metrics ✅
+- /metrics is `@Public()` — document as internal-only for production ✅
+
+**Runtime deployment**: BLOCKED — no Prometheus/Grafana actually deployed.
+
+**New metrics added this group**:
+- `examguard_recordings_started_total` (counter)
+- `examguard_recordings_failed_total` (counter)
+- `examguard_recording_finalize_seconds` (histogram)
+- `examguard_media_reconnects_total` (counter)
+- `examguard_media_disconnects_total` (counter)
+- `examguard_media_producers` (gauge)
+- `examguard_media_consumers` (gauge)
+- `examguard_submissions_total` (counter)
+- `examguard_auto_submissions_total` (counter)
+- `examguard_rate_limited_total` (counter)
+- `examguard_ai_inference_total` (counter)
+- `examguard_ai_inference_failures_total` (counter)
+- `examguard_ai_inference_latency_seconds` (histogram)
+
+### C64: S3 Recording Storage
+
+**Status: PARTIAL** (implementation validated, AWS runtime blocked)
+
+**Static audit results**:
+
+| Check | Result |
+|---|---|
+| Storage interface contract | ✅ `RecordingStorage` abstract class with putObject/getMetadata/exists/openReadStream/verify/deleteObject/createDownloadUrl |
+| Local driver | ✅ `LocalRecordingStorage` with path traversal protection |
+| S3 driver | ✅ `S3RecordingStorage` with AWS SDK v3 |
+| Object key generation | ✅ Tenant-scoped: `<orgId>/recordings/<recordingId>/<kind>` |
+| No PII in keys | ✅ Keys use UUIDs, not names/emails |
+| Signed URL expiry | ✅ Configurable TTL (default 300s) |
+| Signed URL not logged | ✅ |
+| Tenant isolation | ✅ Keys include orgId; authorization checks in controller |
+| Path traversal protection | ✅ `resolveKey` rejects absolute keys and null bytes |
+| Integrity verification | ✅ Local: SHA-256 + size; S3: size + recorder-supplied checksum |
+| Failure → FAILED state | ✅ Storage errors propagate to recording FAILED state |
+| Idempotent delete | ✅ Deleting missing object is no-op |
+| Factory | ✅ `createRecordingStorage()` validates S3 config, fails loudly |
+
+**S3 production config (documented, not active)**:
+- Private bucket required
+- Block public access
+- Server-side encryption (SSE-S3 or SSE-KMS)
+- Least-privilege IAM role
+- Lifecycle/retention policies
+
+**AWS runtime validation**: BLOCKED — no AWS credentials available.
+
+### C65: Electron Production Release Engineering
+
+**Status: PARTIAL**
+
+**Build evidence**:
+
+| Step | Result |
+|---|---|
+| electron-builder in devDeps | ✅ Added `electron-builder@26.15.3` |
+| `pnpm build` (esbuild + vite) | ✅ Main + preload + renderer built |
+| `--win nsis` packaging | ✅ NSIS installer built (107 MB, unsigned) |
+| Output location | `dist/installer/ExamGuard Setup 0.3.0.exe` |
+| Security: contextIsolation | ✅ `true` |
+| Security: sandbox | ✅ `true` |
+| Security: nodeIntegration | ✅ `false` |
+| Security: devTools blocked | ✅ In exam mode / production |
+| Security: navigation blocked | ✅ `will-navigate` + `will-redirect` prevented |
+| Security: popups blocked | ✅ `setWindowOpenHandler(() => deny)` |
+| No secrets bundled | ✅ `.env` excluded by electron-builder files config |
+| No source maps in prod | ✅ esbuild/vite production builds |
+
+**Code signing**: NOT SIGNED — no certificate available.
+**Auto-update**: NOT IMPLEMENTED — no update mechanism.
+**Cross-platform**:
+- Windows: ✅ NSIS installer built and verified on this machine
+- macOS: ❌ Cannot build DMG on Windows (requires macOS)
+- Linux: ❌ Cannot build AppImage on Windows (requires Linux)
 
 ---
 

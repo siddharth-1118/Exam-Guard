@@ -114,10 +114,6 @@ export class MetricsService {
     this.setGauge('examguard_media_participants', count);
   }
 
-  setRecordingsActive(count: number): void {
-    this.setGauge('examguard_recordings_active', count);
-  }
-
   setRedisHealth(healthy: boolean): void {
     this.setGauge('examguard_redis_health', healthy ? 1 : 0);
   }
@@ -128,6 +124,62 @@ export class MetricsService {
 
   recordMfaFailure(): void {
     this.incCounter('examguard_mfa_failures_total');
+  }
+
+  recordRecordingStarted(): void {
+    this.incCounter('examguard_recordings_started_total');
+  }
+
+  recordRecordingFailed(): void {
+    this.incCounter('examguard_recordings_failed_total');
+  }
+
+  observeRecordingFinalizeDuration(durationMs: number): void {
+    this.observeHistogram('examguard_recording_finalize_seconds', durationMs / 1000);
+  }
+
+  setRecordingsActive(count: number): void {
+    this.setGauge('examguard_recordings_active', count);
+  }
+
+  recordMediaReconnect(): void {
+    this.incCounter('examguard_media_reconnects_total');
+  }
+
+  recordMediaDisconnect(): void {
+    this.incCounter('examguard_media_disconnects_total');
+  }
+
+  setMediaProducers(count: number): void {
+    this.setGauge('examguard_media_producers', count);
+  }
+
+  setMediaConsumers(count: number): void {
+    this.setGauge('examguard_media_consumers', count);
+  }
+
+  recordSubmission(): void {
+    this.incCounter('examguard_submissions_total');
+  }
+
+  recordAutoSubmission(): void {
+    this.incCounter('examguard_auto_submissions_total');
+  }
+
+  recordRateLimited(): void {
+    this.incCounter('examguard_rate_limited_total');
+  }
+
+  recordInferenceCount(): void {
+    this.incCounter('examguard_ai_inference_total');
+  }
+
+  recordInferenceFailure(): void {
+    this.incCounter('examguard_ai_inference_failures_total');
+  }
+
+  observeInferenceLatency(durationMs: number): void {
+    this.observeHistogram('examguard_ai_inference_latency_seconds', durationMs / 1000);
   }
 
   // ---- Internal helpers ----

@@ -4,15 +4,7 @@ packages:
   - "packages/*"
 
 allowBuilds:
-  '@embedded-postgres/windows-x64': set this to true or false
-  mediasoup: set this to true or false
-
-onlyBuiltDependencies:
-  - "@prisma/client"
-  - "@prisma/engines"
-  - "prisma"
-  - "esbuild"
-  - "argon2"
-  - "@embedded-postgres/windows-x64"
-  - "electron"
-  - "mediasoup"
+  '@embedded-postgres/windows-x64': true
+  electron-winstaller: true
+  ffmpeg-static: true
+  mediasoup: true

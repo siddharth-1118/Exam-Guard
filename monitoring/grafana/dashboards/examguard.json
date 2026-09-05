@@ -1,0 +1,232 @@
+{
+  "annotations": { "list": [] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "links": [],
+  "panels": [
+    {
+      "title": "API Request Rate",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "rate(examguard_http_requests_total[5m])",
+          "legendFormat": "{{method}} {{route}} {{status}}"
+        }
+      ]
+    },
+    {
+      "title": "API Request Latency (p95)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 0 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(examguard_http_request_duration_seconds_bucket[5m]))",
+          "legendFormat": "p95 latency"
+        }
+      ]
+    },
+    {
+      "title": "API Error Rate (5xx)",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(examguard_http_requests_total{status=~\"5..\"}[5m])",
+          "legendFormat": "5xx errors/sec"
+        }
+      ]
+    },
+    {
+      "title": "Rate Limited Requests",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "targets": [
+        {
+          "expr": "rate(examguard_rate_limited_total[5m])",
+          "legendFormat": "rate limited/sec"
+        }
+      ]
+    },
+    {
+      "title": "Active Exam Attempts",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 0, "y": 16 },
+      "targets": [
+        {
+          "expr": "examguard_attempts_active",
+          "legendFormat": "active"
+        }
+      ]
+    },
+    {
+      "title": "Submissions",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 8, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(examguard_submissions_total[5m])",
+          "legendFormat": "submissions/sec"
+        }
+      ]
+    },
+    {
+      "title": "Auto-Submissions",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 8, "x": 16, "y": 16 },
+      "targets": [
+        {
+          "expr": "rate(examguard_auto_submissions_total[5m])",
+          "legendFormat": "auto-submissions/sec"
+        }
+      ]
+    },
+    {
+      "title": "Active Media Participants",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 8, "x": 0, "y": 22 },
+      "targets": [
+        {
+          "expr": "examguard_media_participants",
+          "legendFormat": "participants"
+        }
+      ]
+    },
+    {
+      "title": "Media Reconnects",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 8, "y": 22 },
+      "targets": [
+        {
+          "expr": "rate(examguard_media_reconnects_total[5m])",
+          "legendFormat": "reconnects/sec"
+        }
+      ]
+    },
+    {
+      "title": "Media Disconnects",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 22 },
+      "targets": [
+        {
+          "expr": "rate(examguard_media_disconnects_total[5m])",
+          "legendFormat": "disconnects/sec"
+        }
+      ]
+    },
+    {
+      "title": "Producers / Consumers",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 30 },
+      "targets": [
+        {
+          "expr": "examguard_media_producers",
+          "legendFormat": "producers"
+        },
+        {
+          "expr": "examguard_media_consumers",
+          "legendFormat": "consumers"
+        }
+      ]
+    },
+    {
+      "title": "Active Recordings",
+      "type": "stat",
+      "gridPos": { "h": 8, "w": 6, "x": 12, "y": 30 },
+      "targets": [
+        {
+          "expr": "examguard_recordings_active",
+          "legendFormat": "active"
+        }
+      ]
+    },
+    {
+      "title": "Recording Failures",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 6, "x": 18, "y": 30 },
+      "targets": [
+        {
+          "expr": "rate(examguard_recordings_failed_total[5m])",
+          "legendFormat": "failures/sec"
+        }
+      ]
+    },
+    {
+      "title": "Recording Finalization Latency",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 38 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, rate(examguard_recording_finalize_seconds_bucket[5m]))",
+          "legendFormat": "p95 finalize"
+        }
+      ]
+    },
+    {
+      "title": "AI Inference",
+      "type": "timeseries",
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 38 },
+      "targets": [
+        {
+          "expr": "rate(examguard_ai_inference_total[5m])",
+          "legendFormat": "inference/sec"
+        },
+        {
+          "expr": "rate(examguard_ai_inference_failures_total[5m])",
+          "legendFormat": "failures/sec"
+        }
+      ]
+    },
+    {
+      "title": "Auth Failures",
+      "type": "timeseries",
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 46 },
+      "targets": [
+        {
+          "expr": "rate(examguard_auth_failures_total[5m])",
+          "legendFormat": "auth failures/sec"
+        },
+        {
+          "expr": "rate(examguard_mfa_failures_total[5m])",
+          "legendFormat": "MFA failures/sec"
+        }
+      ]
+    },
+    {
+      "title": "Redis Health",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 46 },
+      "targets": [
+        {
+          "expr": "examguard_redis_health",
+          "legendFormat": "healthy"
+        }
+      ],
+      "fieldConfig": {
+        "mappings": [
+          { "options": { "0": { "text": "DOWN", "color": "red" } }, "type": "value" },
+          { "options": { "1": { "text": "UP", "color": "green" } }, "type": "value" }
+        ]
+      }
+    },
+    {
+      "title": "Rate Limited Total",
+      "type": "stat",
+      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 46 },
+      "targets": [
+        {
+          "expr": "increase(examguard_rate_limited_total[1h])",
+          "legendFormat": "last hour"
+        }
+      ]
+    }
+  ],
+  "schemaVersion": 39,
+  "tags": ["examguard"],
+  "templating": { "list": [] },
+  "time": { "from": "now-1h", "to": "now" },
+  "title": "ExamGuard Overview",
+  "uid": "examguard-overview",
+  "version": 1
+}

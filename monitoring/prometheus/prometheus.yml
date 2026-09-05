@@ -1,0 +1,42 @@
+# ExamGuard Prometheus Configuration
+# Deploy alongside the ExamGuard stack.
+# Usage: prometheus --config.file=prometheus.yml
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  # ---- ExamGuard API ----
+  - job_name: 'examguard-api'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['api:4000']
+        labels:
+          service: 'api'
+    scrape_interval: 10s
+
+  # ---- ExamGuard Media/SFU ----
+  - job_name: 'examguard-media'
+    metrics_path: '/metrics'
+    static_configs:
+      - targets: ['media:4010']
+        labels:
+          service: 'media'
+    scrape_interval: 15s
+
+  # ---- PostgreSQL (if postgres_exporter is deployed) ----
+  - job_name: 'postgres'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+        labels:
+          service: 'database'
+    scrape_interval: 30s
+
+  # ---- Redis (if redis_exporter is deployed) ----
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          service: 'redis'
+    scrape_interval: 15s
