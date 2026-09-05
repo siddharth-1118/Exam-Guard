@@ -1,85 +1,119 @@
-# ExamGuard — Deployment
+# ExamGuard Deployment Guide (C52)
 
-## 1. Environments
+## Architecture Overview
 
-| Env | Stack | Purpose |
-|---|---|---|
-| Dev | `docker compose up -d` (Postgres + Redis) + local API/web | This repo, out of the box |
-| Pilot | Compose/1-node + LiveKit | ≤100 concurrent students (spec §36 initial target) |
-| Production | k8s (orchestration) + managed PG/Redis + object storage + SFU cluster | 500–5,000+ |
+```
+Internet → Reverse Proxy (nginx) → API (port 4000)
+                                  → PostgreSQL (port 5432)
+                                  → Redis (port 6379)
+                                  → Media/SFU (port 4010)
+                                  → Recording Storage (local/S3)
+                                  → Monitor Portal (port 3001)
+                                  → Admin Portal (port 3002)
+```
 
-## 2. Local Development
+## Prerequisites
+
+- Node.js 20+
+- PostgreSQL 16+
+- Redis 7+
+- FFmpeg (for recording egress)
+- pnpm 9+
+
+## Environment Variables
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NODE_ENV` | Yes | `development` | Set to `production` |
+| `APP_ENV` | Yes | `development` | Set to `production` |
+| `DATABASE_URL` | Yes | - | PostgreSQL connection string |
+| `REDIS_URL` | Yes | - | Redis connection string |
+| `JWT_SECRET` | Yes | - | Min 16 chars in production |
+| `JWT_ACCESS_TTL` | No | 900 | Access token TTL (seconds) |
+| `JWT_REFRESH_TTL` | No | 604800 | Refresh token TTL (seconds) |
+| `CORS_ORIGINS` | No | localhost | Comma-separated allowed origins |
+| `SFU_URL` | Yes | - | WebSocket URL for SFU |
+| `SFU_ADMIN_KEY` | Yes | - | Internal admin key |
+| `STORAGE_DRIVER` | No | `local` | `local` or `s3` |
+| `S3_BUCKET` | If S3 | - | S3 bucket name |
+| `S3_ACCESS_KEY_ID` | If S3 | - | AWS access key |
+| `S3_SECRET_ACCESS_KEY` | If S3 | - | AWS secret key |
+| `API_PORT` | No | 4000 | API listen port |
+
+## Deployment Steps
+
+### 1. Database Setup
 
 ```bash
-cp .env.example .env          # fill DATABASE_URL, JWT_SECRET, etc.
-pnpm install
-docker compose up -d          # postgres + redis
-pnpm db:migrate               # prisma migrate deploy (dev: migrate dev)
-pnpm db:seed                  # demo org, users, exam, questions
-pnpm dev                      # api (4000) + admin (3000) + student (3001) + monitor (3002)
+# Create database
+createdb examguard
+
+# Run migrations
+cd packages/database
+npx prisma migrate deploy
+
+# Seed (development only!)
+npx prisma db seed
 ```
 
-Ports: API `4000`, admin-web `3000`, student-web `3001`, monitor-web `3002`, Postgres `5432`, Redis `6379`, (future) LiveKit `7880/5349`.
+### 2. API Service
 
-## 3. Environment Variables (`.env.example`, never commit real values)
+```bash
+# Build
+cd services/api
+pnpm build
 
-```
-DATABASE_URL=postgresql://examguard:examguard@localhost:5432/examguard?schema=public
-REDIS_URL=redis://localhost:6379
-JWT_SECRET=<32+ random bytes>
-JWT_ACCESS_TTL=900
-JWT_REFRESH_TTL=604800
-API_PORT=4000
-APP_ENV=development
-CORS_ORIGINS=http://localhost:3000,http://localhost:3001,http://localhost:3002
-STORAGE_ENDPOINT=        # Phase 4 (object storage)
-STORAGE_BUCKET=examguard
-WEBRTC_SERVER_URL=       # Phase 4 (LiveKit)
-AI_SERVICE_URL=          # Phase 5
-SMTP_URL=                # Phase 7 (notifications)
+# Start
+node dist/main.js
 ```
 
-## 4. Container Topology (production design)
+### 3. Media/SFU Service
 
+```bash
+# Build
+cd services/media
+pnpm build
+
+# Start
+node dist/index.js
 ```
-LB/TLS ─┬─ apps/*-web (Next.js, serverless or containers)
-        └─ services/api (N>1, stateless)
-PostgreSQL (managed, replicas) · Redis (managed, cluster)
-Realtime (N) ── Redis pub/sub ── API
-Media: LiveKit SFU nodes (per region; 1 node ≈ 100+ thumbnail streams)
-AI workers (GPU pool) ── consume from queue ── write AiEvents
-Object storage (evidence/recordings) + CDN for static assets
+
+### 4. Health Checks
+
+```bash
+# Liveness
+curl http://localhost:4000/health
+
+# Readiness
+curl http://localhost:4000/ready
+
+# Detailed readiness
+curl http://localhost:4000/ready/detailed
+
+# Metrics
+curl http://localhost:4000/metrics
 ```
 
-- API is stateless (sessions in Redis/tokens) ⇒ horizontal scaling.
-- Media never traverses the API (SFU only, §35).
-- Migrations run as a one-shot job before deploy (`prisma migrate deploy`).
-- Health checks: `/health` (liveness) and `/ready` (DB+Redis ping) wired into orchestrator probes.
+## Docker Deployment
 
-## 5. Scaling Notes (spec §36)
+```bash
+# Build and start all services
+docker compose up -d
 
-- **100 students:** 2 API replicas, 1 Redis, 1 Postgres (tuned `shared_buffers`), 1 LiveKit node, 1 AI worker. Safe margin.
-- **500:** +2 API replicas, LiveKit ×2, AI ×2, Postgres read replica for reporting, Redis pub/sub only (no in-memory state).
-- **5,000+:** per-region deployments, exams sharded across media clusters, queue-backed everything (BullMQ), object storage tiering, CDN, vertical DB (or Citus for multi-tenant sharding — documented option).
+# Check status
+docker compose ps
 
-## 6. Docker Compose (dev)
-
-`infrastructure/docker/docker-compose.yml` (also at repo root for convenience):
-
-```yaml
-services:
-  postgres:   postgres:16-alpine (volume, healthcheck)
-  redis:      redis:7-alpine
-  api:        build services/api (optional in dev; run via pnpm for hot reload)
-  # minio:    Phase 4 object storage (S3-compatible) for evidence
-  # livekit:  Phase 4 media server
+# View logs
+docker compose logs -f api
 ```
-Compose profiles (`docker compose --profile media up`) activate Phase 4+ services when implemented — nothing fake is started today.
 
-## 7. Security Operations
+## Production Considerations
 
-- Secrets via env/secret manager; never in images or repo.
-- Signed container images, non-root runtime user.
-- TLS everywhere; HSTS; CSP in production builds.
-- Backup: daily PITR for Postgres, bucket versioning + lifecycle for storage; restore drills documented (Phase 7 hardening).
-- Observability: structured JSON logs, `/metrics` (Phase 7), error tracking, WebRTC/AI connection metrics (spec §56).
+- Use a reverse proxy (nginx/HAProxy) for TLS termination
+- Use a managed PostgreSQL service (AWS RDS, GCP Cloud SQL)
+- Use a managed Redis service (AWS ElastiCache, GCP Memorystore)
+- Use S3 for recording storage in production
+- Enable PostgreSQL WAL archiving for point-in-time recovery
+- Configure monitoring (Prometheus + Grafana)
+- Set up alerting (PagerDuty, Slack)
+- Use a secrets manager (AWS Secrets Manager, HashiCorp Vault)

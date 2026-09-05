@@ -1,34 +1,102 @@
-# ExamGuard local development environment.
-# Only services that exist are included; Phase 4+ services (minio, livekit, ai)
-# will be added behind compose profiles when implemented — nothing fake is started.
+# ExamGuard — Local Production-Like Topology
+# Usage: docker compose up -d
+# This is NOT real production — it's a local topology for validation.
+# Real production requires proper infrastructure (managed DB, Redis, S3, etc.)
+
 services:
+  # ---- PostgreSQL ----
   postgres:
     image: postgres:16-alpine
-    container_name: examguard-postgres
     environment:
-      POSTGRES_USER: examguard
-      POSTGRES_PASSWORD: examguard
       POSTGRES_DB: examguard
+      POSTGRES_USER: examguard
+      POSTGRES_PASSWORD: examguard-local-dev-only
     ports:
       - "5432:5432"
     volumes:
-      - examguard-pgdata:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U examguard -d examguard"]
-      interval: 5s
+      test: ["CMD-SHELL", "pg_isready -U examguard"]
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+    restart: unless-stopped
 
+  # ---- Redis ----
   redis:
     image: redis:7-alpine
-    container_name: examguard-redis
     ports:
       - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
+      interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
+    restart: unless-stopped
+
+  # ---- API Service ----
+  api:
+    build:
+      context: .
+      dockerfile: services/api/Dockerfile
+    ports:
+      - "4000:4000"
+    environment:
+      NODE_ENV: production
+      APP_ENV: production
+      DATABASE_URL: postgresql://examguard:examguard-local-dev-only@postgres:5432/examguard?schema=public
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: production-jwt-secret-change-me-in-real-deployment
+      JWT_ACCESS_TTL: 900
+      JWT_REFRESH_TTL: 604800
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001,http://localhost:3002
+      SFU_URL: ws://media:4010/sfu
+      SFU_ADMIN_KEY: examguard-dev-sfu-admin-key
+      STORAGE_DRIVER: local
+      RECORDING_STORAGE_DIR: /app/storage/recordings
+      API_PORT: "4000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
+
+  # ---- Media/SFU Service ----
+  media:
+    build:
+      context: .
+      dockerfile: services/media/Dockerfile
+    ports:
+      - "4010:4010"
+      - "40000-40100:40000-40100/udp"
+    environment:
+      NODE_ENV: production
+      SFU_PORT: "4010"
+      SFU_HOST: "0.0.0.0"
+      JWT_SECRET: production-jwt-secret-change-me-in-real-deployment
+      SFU_ADMIN_KEY: examguard-dev-sfu-admin-key
+      SFU_RTC_MIN_PORT: "40000"
+      SFU_RTC_MAX_PORT: "40100"
+      RECORDING_STORAGE_DIR: /app/storage/recordings
+      API_URL: http://api:4000
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "--no-verbose", "--tries=1", "--spider", "http://localhost:4010/status"]
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+    restart: unless-stopped
 
 volumes:
-  examguard-pgdata:
+  postgres_data:
+    driver: local

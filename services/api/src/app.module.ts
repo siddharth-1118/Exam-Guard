@@ -24,6 +24,7 @@ import { ReportsModule } from './reports/reports.module';
 import { HealthModule } from './health/health.module';
 import { RecordingsModule } from './recordings/recordings.module';
 import { PrivacyModule } from './privacy/privacy.module';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { PrivacyModule } from './privacy/privacy.module';
     ReportsModule,
     RecordingsModule,
     PrivacyModule,
+    MetricsModule,
     HealthModule,
   ],
   providers: [
