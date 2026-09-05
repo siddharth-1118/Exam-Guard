@@ -30,6 +30,13 @@ export class ExamsService {
 
   async create(user: UserContext, dto: CreateExamDto) {
     const orgId = this.assertOrg(user);
+    if (dto.startAt && dto.endAt && new Date(dto.startAt) >= new Date(dto.endAt)) {
+      throw new BadRequestException('Exam start time must be before end time');
+    }
+    if (dto.durationMinutes !== undefined && dto.durationMinutes < 1) {
+      throw new BadRequestException('Duration must be at least 1 minute');
+    }
+
     const exam = await this.prisma.$transaction(async (tx) => {
       const created = await tx.exam.create({
         data: {
@@ -71,6 +78,19 @@ export class ExamsService {
       });
       return created;
     });
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: orgId,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'exam.created',
+        resourceType: 'Exam',
+        resourceId: exam.id,
+        detail: { name: exam.name, status: exam.status },
+      },
+    });
+
     return this.findOne(user, exam.id);
   }
 
@@ -130,6 +150,39 @@ export class ExamsService {
 
   async update(user: UserContext, examId: string, dto: UpdateExamDto) {
     await this.requireOwned(user, examId);
+    const existing = await this.prisma.exam.findUnique({ where: { id: examId } });
+    if (!existing) throw new NotFoundException('Exam not found');
+
+    const attemptCount = await this.prisma.examAttempt.count({ where: { examId } });
+
+    // Guard structural edits on published/active exams
+    if (existing.status === 'OPEN' || attemptCount > 0) {
+      const restrictedKeys = [
+        'durationMinutes',
+        'passingScore',
+        'negativeMarkingEnabled',
+        'negativeMarkingValue',
+        'autoSubmit',
+        'shuffleQuestions',
+        'shuffleOptions',
+      ] as const;
+      for (const key of restrictedKeys) {
+        if (dto[key] !== undefined && dto[key] !== existing[key]) {
+          throw new BadRequestException(
+            `Cannot modify ${key} while exam is open or has student attempts`,
+          );
+        }
+      }
+    }
+
+    if (dto.startAt || dto.endAt) {
+      const newStart = dto.startAt ? new Date(dto.startAt) : existing.startAt;
+      const newEnd = dto.endAt ? new Date(dto.endAt) : existing.endAt;
+      if (newStart && newEnd && newStart >= newEnd) {
+        throw new BadRequestException('Exam start time must be before end time');
+      }
+    }
+
     const data: Record<string, unknown> = {};
     for (const key of [
       'name', 'description', 'instructions', 'startAt', 'endAt', 'durationMinutes',
@@ -162,6 +215,19 @@ export class ExamsService {
         },
       });
     }
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: existing.organizationId,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'exam.updated',
+        resourceType: 'Exam',
+        resourceId: examId,
+        detail: { updatedFields: Object.keys(data) },
+      },
+    });
+
     return exam;
   }
 
@@ -178,6 +244,13 @@ export class ExamsService {
   async linkQuestions(user: UserContext, examId: string, dto: LinkQuestionsDto) {
     await this.requireOwned(user, examId);
     const orgId = this.assertOrg(user);
+
+    const exam = await this.prisma.exam.findUnique({ where: { id: examId } });
+    const attemptCount = await this.prisma.examAttempt.count({ where: { examId } });
+    if (exam?.status === 'OPEN' || attemptCount > 0) {
+      throw new BadRequestException('Cannot modify questions while exam is active or has student attempts');
+    }
+
     const questions = await this.prisma.question.findMany({
       where: { id: { in: dto.questionIds }, organizationId: orgId },
     });
@@ -196,6 +269,19 @@ export class ExamsService {
         create: { examId, questionId: qid, order: order++ },
       });
     }
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: orgId,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'exam.questions.linked',
+        resourceType: 'Exam',
+        resourceId: examId,
+        detail: { count: dto.questionIds.length },
+      },
+    });
+
     return this.findOne(user, examId);
   }
 
@@ -215,6 +301,19 @@ export class ExamsService {
         create: { examId, studentId: sid, assignedById: user.userId },
       });
     }
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: orgId,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'exam.students.assigned',
+        resourceType: 'Exam',
+        resourceId: examId,
+        detail: { count: dto.studentIds.length },
+      },
+    });
+
     return this.findOne(user, examId);
   }
 

@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../common/decorators';
 import type { UserContext } from '../common/types';
 import { AttemptsService } from './attempts.service';
-import { SaveAnswerDto, StartAttemptDto } from './dto';
+import { RegradeAttemptDto, SaveAnswerDto, StartAttemptDto } from './dto';
 
 @Controller('api/v1/attempts')
 export class AttemptsController {
@@ -36,5 +36,15 @@ export class AttemptsController {
   @RequirePermissions('attempt:submit')
   submit(@CurrentUser() user: UserContext, @Param('id') id: string) {
     return this.attempts.submit(user, id);
+  }
+
+  @Post(':id/regrade')
+  @RequirePermissions('attempt:grade')
+  regrade(
+    @CurrentUser() user: UserContext,
+    @Param('id') id: string,
+    @Body() dto: RegradeAttemptDto,
+  ) {
+    return this.attempts.regrade(user, id, dto);
   }
 }

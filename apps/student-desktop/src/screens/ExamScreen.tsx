@@ -106,6 +106,7 @@ export function ExamScreen({
       updateSession: (kind, status) => {
         void bridge().updateMediaSession({ kind, status });
       },
+      selectedCameraId: typeof consent.selectedCameraId === 'string' ? consent.selectedCameraId : undefined,
     });
     const controller = createExamDeviceController({ env, enabled: deviceKinds });
     controller.onStatus((snap) => setDeviceSnap(snap));

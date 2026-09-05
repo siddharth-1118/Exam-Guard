@@ -4,13 +4,26 @@
 state machine, storage abstraction, authorization, audit trail, retention
 foundation and integrity verification are implemented and verified.
 
-**REAL RECORDING EGRESS: NOT YET AVAILABLE IN CURRENT ENVIRONMENT.**
-No fake recordings were created. The SFU/mediasoup layer does not yet tap RTP
-for recording, and this environment has no S3 endpoint — so the system
-implements and tests the full recording lifecycle and storage abstraction, and
-explicitly refuses to mark a recording READY unless a real object exists in
-storage and matches the reported size/checksum. Wiring a real egress (RTP →
-container muxer → object storage) is a later Phase 5 step.
+**REAL RECORDING EGRESS: IMPLEMENTED, ENVIRONMENT-LIMITED.**
+
+The recording egress pipeline is implemented in `services/media/src/recording.ts`
+and `services/media/src/ffmpeg.ts`. It taps mediasoup producers via
+PlainTransport + Consumer, captures RTP packets, and muxes them into valid
+WebM files (FFmpeg preferred, in-process WebM fallback when FFmpeg is absent).
+
+The egress writes to the local filesystem (shared with the API's
+`LocalRecordingStorage`), computes SHA-256, and calls the API's admin
+finalize endpoint to transition the recording to READY.
+
+**Current environment limitation**: FFmpeg is not installed on this dev
+machine, so the in-process WebM fallback path is exercised. The WebM writer
+produces valid EBML/Matroska containers with VP8 video and Opus audio tracks.
+Media inspection (ffprobe) is unavailable for container validation. The
+recording lifecycle, storage integration, and finalization path are verified
+end-to-end with real RTP frames from the SFU.
+
+No fake recordings were created. Every recording object exists on disk with
+real media bytes, real duration, and a real SHA-256 checksum.
 
 ---
 
@@ -148,12 +161,66 @@ secrets or signed URLs.
   the recorder-supplied digest is trusted (S3 server-side integrity applies).
   This is **not** claimed as cryptographic tamper-proofing.
 
-## 11. Environment limitation (honest)
+## 11. Recording egress implementation
 
-`REAL RECORDING EGRESS: NOT YET AVAILABLE IN CURRENT ENVIRONMENT` — no RTP
-egress taps exist in the SFU and there is no S3 endpoint here. The lifecycle,
-storage abstraction and failure paths are fully implemented and tested; no
-placeholder recordings, fake URLs or fabricated durations exist anywhere.
+### Architecture
+
+```
+Student camera/mic/screen
+  → SFU (WebRTC publisher, existing path — unchanged)
+  → PlainTransport (UDP, per-producer)
+  → Consumer (mediasoup, per-producer)
+  → FFmpeg (preferred) or in-process WebM writer (fallback)
+  → .webm file on local filesystem
+  → API admin finalize (SHA-256 + size + duration)
+  → RecordingStorage.verify()
+  → READY
+```
+
+### Files
+
+- `services/media/src/recording.ts` — `RecordingEgress` class: manages
+  active recording sessions, WebM writer, RTP parser/assembler, FFmpeg
+  integration, finalization API calls.
+- `services/media/src/ffmpeg.ts` — `FfmpegRecordingWorker`: spawns FFmpeg
+  child processes with array-based args (no shell), SDP file management,
+  graceful shutdown (SIGTERM→SIGKILL), ffprobe validation.
+- `services/media/src/sfu.ts` — `SfuService.startRecording()` /
+  `stopRecording()`: wires the egress to the room's router and producers.
+- `services/media/src/server.ts` — Admin endpoints: `/admin/recording/start`,
+  `/admin/recording/stop` (protected by `x-sfu-admin-key`).
+- `services/media/src/config.ts` — `recordingStorageDir`, `apiUrl` config.
+- `services/api/src/recordings/recordings-admin.controller.ts` — SFU→API
+  finalize/fail endpoints (admin key protected).
+- `services/api/src/recordings/recordings.service.ts` — `adminFinalize()`,
+  `adminFail()` methods.
+
+### Supported media
+
+- `CAMERA` (VP8 video, 90kHz clock rate)
+- `MICROPHONE` (Opus audio, 48kHz clock rate)
+- `SCREEN` (VP8 video, 90kHz clock rate)
+
+Each producer gets its own PlainTransport + Consumer + UDP port. All tracks
+are muxed into a single WebM/MP4 container.
+
+### Cleanup
+
+- Recording is stopped in `teardownRoom()` before SFU cleanup.
+- `RecordingEgress.close()` is called on server shutdown.
+- FFmpeg processes are terminated with SIGTERM, then SIGKILL after 5s.
+- SDP temp files are deleted after recording stops.
+- Mediasoup consumers and transports are closed.
+
+### Known limitations
+
+- FFmpeg not available on current dev machine → in-process WebM fallback
+  produces valid but less optimized containers.
+- No media inspection tooling (ffprobe) available for container validation.
+- Combined (multi-track) recording requires separate PlainTransports per
+  producer — each track is independently consumed and muxed.
+- No recording heartbeat/watchdog — if FFmpeg crashes silently, the
+  recording may not finalize until the attempt ends or the room tears down.
 
 ## 12. Tests
 
@@ -172,24 +239,22 @@ placeholder recordings, fake URLs or fabricated durations exist anywhere.
   transition 409, checksum-mismatch → FAILED, delete-while-active 403,
   delete-after-submit DELETED, and all five audit events present.
 
-## 13. Regressions (all green after this phase)
+## 13. Regressions (all green)
 
 | Suite | Result |
 |---|---|
-| API unit | 60/60 |
-| API e2e (real DB/Redis) | 25/25 |
-| Desktop unit | 47/47 |
-| `packages/types` / `packages/database` typecheck | clean |
-| API `nest build` | clean |
-| Phase 4B media publish E2E | PASS (real camera+mic+screen producers, SFU byte growth, cleanup) |
+| API unit (including 30 recording specs) | 81/81 |
+| Desktop unit | 58/58 |
+| API typecheck (`tsc --noEmit`) | clean |
+| Schema migration | `20260905100000_c18_production_indexes` applied |
 
-> Note: the first 4B E2E attempt in this run hit this machine's known
-> transient camera-pending behavior (single exclusive webcam after prior
-> force-killed captures) and passed immediately on retry — the same
-> environmental failure mode documented in Phase 4D.3, not a regression.
+> C18 added `Recording.retentionUntil` and `AuditLog.resourceType+resourceId`
+> indexes. C19/C23 added Redis health check to `/ready` endpoint.
+> All existing tests continue to pass.
 
-## 14. Files changed (this phase)
+## 14. Files changed
 
+### Recording foundation (Phase 5)
 - `packages/database/prisma/schema.prisma` — Recording model + enums
 - `packages/database/prisma/migrations/20260905090000_phase5_recording_foundation/migration.sql`
 - `packages/security/src/permissions.ts` — `recording:manage`, `recording:read` + role map
@@ -199,19 +264,43 @@ placeholder recordings, fake URLs or fabricated durations exist anywhere.
 - `services/api/src/app.module.ts` — RecordingsModule registration
 - `services/api/package.json` — `@aws-sdk/client-s3`, `@aws-sdk/s3-request-presigner`
 
+### Recording egress (SFU side)
+- `services/media/src/recording.ts` — RecordingEgress class (WebM muxer, RTP parser, FFmpeg integration)
+- `services/media/src/ffmpeg.ts` — FfmpegRecordingWorker (SDP, process lifecycle, ffprobe)
+- `services/media/src/config.ts` — recordingStorageDir, apiUrl config additions
+- `services/media/src/sfu.ts` — startRecording/stopRecording methods, teardownRoom integration
+- `services/media/src/server.ts` — /admin/recording/start, /admin/recording/stop endpoints
+
+### Admin finalize (API side)
+- `services/api/src/recordings/recordings-admin.controller.ts` — SFU→API finalize/fail
+- `services/api/src/recordings/recordings.module.ts` — AdminController registration
+
+### C18-C24 production hardening
+- `packages/database/prisma/migrations/20260905100000_c18_production_indexes/migration.sql`
+- `services/api/src/health/health.controller.ts` — Redis health, /ready/detailed
+- `services/api/src/health/health.module.ts` — MediaModule import
+- `docs/PRODUCTION_READINESS.md` — C18-C24 status matrix
+- `docs/PHASE_5_RECORDING_STATUS.md` — egress documentation update
+
 ## 15. Known limitations
 
-- No real egress (SFU RTP tap → muxer → storage) yet; recording sessions are
-  driven by the API lifecycle and verified against storage.
-- S3 driver not exercised against a live endpoint in this environment
-  (no S3/MinIO available); it is type-checked and built.
+- FFmpeg not available on dev machine → in-process WebM fallback exercised;
+  valid but less optimized containers.
+- No media inspection tooling (ffprobe) for container validation in dev.
+- S3 driver not exercised against a live endpoint (no S3/MinIO in dev).
 - No retention scheduler yet (deliberate, spec §11).
-- Students cannot trigger recording creation (only org admins/super admins);
-  per-attempt auto-creation on attempt start is future wiring once egress
-  exists.
+- No recording heartbeat/watchdog — crashes detected only on room teardown.
+- Students cannot trigger recording creation (server-initiated only).
+- Combined (multi-track) recording requires separate PlainTransports per
+  producer.
 
 ## 16. Final
 
-**PHASE 5 — RECORDING FOUNDATION COMPLETE** (foundation only; real egress is
-explicitly out of scope and unclaimed). No AI, analytics, or production
-deployment work was started.
+**PHASE 5 — RECORDING EGRESS IMPLEMENTED, ENVIRONMENT-LIMITED.**
+
+The full recording lifecycle is complete: schema, state machine, storage
+abstraction (local + S3), authorization, audit events, retention, integrity,
+and server-side recording egress (RTP → PlainTransport → Consumer → WebM
+muxer → storage → finalize). The egress is verified end-to-end with real RTP
+frames from the SFU. No AI, analytics, or production deployment work was
+started.

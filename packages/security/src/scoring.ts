@@ -90,7 +90,19 @@ export function gradeAnswer(question: GradableQuestion, value: AnswerValue): Gra
       const correct = correctIds.some((c) => Math.abs(c - parsed) <= tolerance);
       return { ...base, correct, earned: correct ? question.marks : -question.negativeMarks };
     }
-    case 'SHORT_ANSWER':
+    case 'SHORT_ANSWER': {
+      const options = normalizeOptions(question.options);
+      const correctTexts = options
+        .filter((o) => o.isCorrect && o.text !== undefined)
+        .map((o) => String(o.text).trim().toLowerCase());
+      if (correctTexts.length === 0) {
+        return base;
+      }
+      const studentText = String(value).trim().toLowerCase();
+      const correct = correctTexts.includes(studentText);
+      const earned = correct ? question.marks : -question.negativeMarks;
+      return { ...base, autoGraded: true, correct, earned };
+    }
     case 'LONG_ANSWER':
     case 'CODE':
       // Manual grading. Earned stays 0 until a grader records marks.
@@ -147,7 +159,7 @@ export function computeScore(
     }
   }
 
-  score = Math.max(0, Math.round(score * 1000) / 1000);
+  score = Math.min(maxScore, Math.max(0, Math.round(score * 1000) / 1000));
 
   return {
     score,

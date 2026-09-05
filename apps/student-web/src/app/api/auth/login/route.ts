@@ -27,7 +27,8 @@ export async function POST(req: NextRequest) {
     );
   }
   const store = await cookies();
-  setAuthCookies(store, data.accessToken, data.refreshToken, false);
+  const secure = process.env.NODE_ENV === 'production';
+  setAuthCookies(store, data.accessToken, data.refreshToken, secure);
   const role = data.user?.role;
   return NextResponse.json({
     redirect: role === 'STUDENT' ? '/student/dashboard' : '/login',

@@ -501,13 +501,22 @@ export class MonitoringService {
     if (!assigned) throw new ForbiddenException('Not assigned to this exam');
   }
 
-  private async requireAttemptForStudent(user: UserContext, studentId: string) {
+  private async requireAttemptForStudent(user: UserContext, studentIdOrAttemptId: string) {
     const student = await this.prisma.student.findFirst({
-      where: { id: studentId, organizationId: user.orgId! },
+      where: {
+        OR: [
+          { id: studentIdOrAttemptId },
+          { attempts: { some: { id: studentIdOrAttemptId } } },
+        ],
+        organizationId: user.orgId!,
+      },
     });
     if (!student) throw new NotFoundException('Student not found');
     const attempt = await this.prisma.examAttempt.findFirst({
-      where: { studentId: student.id },
+      where: {
+        studentId: student.id,
+        ...(studentIdOrAttemptId !== student.id ? { id: studentIdOrAttemptId } : {}),
+      },
       orderBy: { createdAt: 'desc' },
     });
     if (!attempt) throw new NotFoundException('No active attempt for this student');

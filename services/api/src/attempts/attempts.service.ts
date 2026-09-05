@@ -16,7 +16,8 @@ function toJson(value: unknown): Prisma.InputJsonValue | undefined {
 }
 import { EventBus } from '../common/event-bus';
 import type { UserContext } from '../common/types';
-import { SaveAnswerDto, StartAttemptDto } from './dto';
+import { RegradeAttemptDto, SaveAnswerDto, StartAttemptDto } from './dto';
+import { RecordingsService } from '../recordings/recordings.service';
 
 type AttemptRow = {
   id: string;
@@ -42,7 +43,9 @@ export class AttemptsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly eventBus: EventBus,
+    private readonly recordingsService: RecordingsService,
   ) {}
+
 
   // -------------------------------------------------------------------------
   // Start
@@ -60,6 +63,9 @@ export class AttemptsService {
     if (exam.startAt && new Date() < exam.startAt) {
       throw new BadRequestException('Exam has not started');
     }
+    if (exam.endAt && new Date() > exam.endAt) {
+      throw new BadRequestException('Exam has ended');
+    }
 
     const student = await this.prisma.student.findFirst({
       where: { organizationId: user.orgId, userId: user.userId },
@@ -69,6 +75,16 @@ export class AttemptsService {
       where: { examId_studentId: { examId: exam.id, studentId: student.id } },
     });
     if (!assignment) throw new ForbiddenException('Not assigned to this exam');
+
+    // Check identity verification requirement
+    if (exam.settings?.identityVerificationRequired) {
+      const consentObj = (dto.consent ?? {}) as Record<string, unknown>;
+      if (!consentObj.identityVerified && !consentObj.consentGiven && consentObj.agreed !== true) {
+        throw new BadRequestException(
+          'Identity verification and student consent are required to start this examination',
+        );
+      }
+    }
 
     const existing = await this.prisma.examAttempt.findFirst({
       where: { examId: exam.id, studentId: student.id },
@@ -257,16 +273,87 @@ export class AttemptsService {
 
   async submit(user: UserContext, attemptId: string) {
     const attempt = await this.findVisibleAttempt(user, attemptId);
+    const exam = await this.prisma.exam.findUnique({ where: { id: attempt.examId } });
     if (attempt.status === 'SUBMITTED' || attempt.status === 'AUTO_SUBMITTED') {
-      throw new ConflictException('Attempt already submitted');
+      return this.toAttemptView(attempt, exam?.durationMinutes ?? 60);
     }
     if (attempt.status === 'TERMINATED') {
       throw new ConflictException('Attempt was terminated; submission is not allowed');
     }
     this.assertCanWrite(attempt);
     await this.finalizeSubmit(attempt, false, user.userId);
-    const exam = await this.prisma.exam.findUnique({ where: { id: attempt.examId } });
     return this.toAttemptView(await this.reload(attempt.id), exam?.durationMinutes ?? 60);
+  }
+
+  async regrade(user: UserContext, attemptId: string, dto?: RegradeAttemptDto) {
+    const attempt = await this.findVisibleAttempt(user, attemptId);
+    if (user.role === 'STUDENT') {
+      throw new ForbiddenException('Students cannot regrade attempts');
+    }
+    const exam = await this.prisma.exam.findUnique({ where: { id: attempt.examId } });
+    if (!exam) throw new NotFoundException('Exam not found');
+
+    if (dto?.grades && dto.grades.length > 0) {
+      for (const item of dto.grades) {
+        const belongsToExam = await this.prisma.examQuestion.findUnique({
+          where: { examId_questionId: { examId: attempt.examId, questionId: item.questionId } },
+        });
+        if (belongsToExam) {
+          await this.prisma.answer.upsert({
+            where: { attemptId_questionId: { attemptId, questionId: item.questionId } },
+            update: { isFinal: true },
+            create: { attemptId, questionId: item.questionId, value: item.score as never, isFinal: true },
+          });
+        }
+      }
+    }
+
+    const examQuestions = await this.prisma.examQuestion.findMany({
+      where: { examId: exam.id },
+      include: { question: { include: { options: true } } },
+      orderBy: { order: 'asc' },
+    });
+    const answers = await this.prisma.answer.findMany({ where: { attemptId: attempt.id } });
+    const negOverride =
+      exam.negativeMarkingEnabled && exam.negativeMarkingValue != null
+        ? exam.negativeMarkingValue
+        : null;
+    const gradable: GradableQuestion[] = examQuestions.map((eq) => ({
+      id: eq.question.id,
+      type: eq.question.type,
+      marks: eq.marksOverride ?? eq.question.marks,
+      negativeMarks: negOverride ?? eq.question.negativeMarks,
+      options: eq.question.options.map((o) => ({ id: o.id, isCorrect: o.isCorrect, text: o.text })),
+      metadata: (eq.question.metadata as { tolerance?: number } | null) ?? undefined,
+    }));
+
+    const summary = computeScore(
+      gradable,
+      answers.map((a) => ({ questionId: a.questionId, value: a.value as never })),
+      exam.negativeMarkingEnabled,
+    );
+
+    const updated = await this.prisma.examAttempt.update({
+      where: { id: attempt.id },
+      data: {
+        score: summary.score,
+        scoreGraded: true,
+      },
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: attempt.organizationId,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'attempt.regrade',
+        resourceType: 'ExamAttempt',
+        resourceId: attempt.id,
+        detail: { previousScore: attempt.score, newScore: summary.score },
+      },
+    });
+
+    return this.toAttemptView(updated, exam.durationMinutes);
   }
 
   // -------------------------------------------------------------------------
@@ -356,13 +443,35 @@ export class AttemptsService {
     return updated;
   }
 
-  /** Submission ends the attempt's SFU publisher participation. */
+  /** Submission ends the attempt's SFU publisher participation and stops active recording. */
   private async closeMediaParticipant(attemptId: string): Promise<void> {
+    const participants = await this.prisma.mediaParticipant.findMany({
+      where: { attemptId },
+      select: { id: true },
+    });
+    for (const p of participants) {
+      try {
+        const sfuUrl = process.env.SFU_URL || 'http://localhost:4010';
+        const adminKey = process.env.SFU_ADMIN_KEY || 'examguard-dev-sfu-admin-key';
+        await fetch(`${sfuUrl.replace(/^ws/, 'http')}/admin/recording/stop`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-sfu-admin-key': adminKey,
+          },
+          body: JSON.stringify({ participantId: p.id }),
+        });
+      } catch {
+        // SFU may already be down or missing participant
+      }
+    }
+
     await this.prisma.mediaParticipant.updateMany({
       where: { attemptId, status: { in: ['CONNECTING', 'ACTIVE', 'RECONNECTING', 'DISCONNECTED'] } },
       data: { status: 'ENDED', endedAt: new Date() },
     });
   }
+
 
   private async toAttemptView(attempt: AttemptRow, durationMinutes: number) {
     const exam = await this.prisma.exam.findUnique({ where: { id: attempt.examId } });

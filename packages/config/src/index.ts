@@ -40,14 +40,32 @@ export interface Env {
 }
 
 export function loadEnv(env: NodeJS.ProcessEnv = process.env): Env {
+  const isProduction = env.NODE_ENV === 'production';
   const jwtSecret = env.JWT_SECRET ?? '';
-  if (jwtSecret.length < 16 && env.APP_ENV !== 'test') {
-    // Dev convenience: a placeholder secret is allowed locally (see .env.example),
-    // but production must fail loudly rather than ship a weak secret.
-    if (env.NODE_ENV === 'production') {
-      throw new Error('JWT_SECRET must be set and at least 16 chars in production');
+
+  if (isProduction && env.APP_ENV !== 'test') {
+    if (
+      !jwtSecret ||
+      jwtSecret.length < 16 ||
+      jwtSecret === 'change-me-to-a-long-random-string' ||
+      jwtSecret === 'dev-only-insecure-secret-change-me'
+    ) {
+      throw new Error(
+        'JWT_SECRET must be set to a secure string (≥ 16 chars) in production and cannot use development default placeholders.',
+      );
+    }
+    if (!env.DATABASE_URL || env.DATABASE_URL.includes('examguard:examguard@localhost')) {
+      throw new Error('DATABASE_URL must be configured with explicit production credentials in production.');
+    }
+    if (!env.REDIS_URL) {
+      throw new Error('REDIS_URL must be configured in production.');
+    }
+    const corsOrigins = (env.CORS_ORIGINS ?? '').split(',').map((s) => s.trim());
+    if (corsOrigins.includes('*') && env.ALLOW_UNRESTRICTED_CORS !== 'true') {
+      throw new Error('CORS_ORIGINS cannot use wildcard "*" in production without explicit ALLOW_UNRESTRICTED_CORS=true.');
     }
   }
+
   return {
     NODE_ENV: env.NODE_ENV ?? 'development',
     APP_ENV: env.APP_ENV ?? 'development',

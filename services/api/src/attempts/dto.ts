@@ -1,4 +1,5 @@
-import { IsBoolean, IsDefined, IsObject, IsOptional, IsString, IsUUID, MinLength } from 'class-validator';
+import { IsArray, IsBoolean, IsDefined, IsNumber, IsObject, IsOptional, IsString, IsUUID, Min, MinLength, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 
 export class StartAttemptDto {
   @IsUUID()
@@ -41,4 +42,25 @@ export class SubmitDto {
   @IsString()
   @MinLength(1)
   confirmation?: string;
+}
+
+export class ManualGradeItemDto {
+  @IsUUID()
+  questionId!: string;
+
+  @IsNumber()
+  @Min(0)
+  score!: number;
+
+  @IsOptional()
+  @IsString()
+  feedback?: string;
+}
+
+export class RegradeAttemptDto {
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ManualGradeItemDto)
+  grades?: ManualGradeItemDto[];
 }

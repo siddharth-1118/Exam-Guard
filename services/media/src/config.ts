@@ -30,10 +30,24 @@ export interface SfuConfig {
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): SfuConfig {
+  const isProduction = env.NODE_ENV === 'production';
   const jwtSecret = env.JWT_SECRET ?? '';
-  if (jwtSecret.length < 16 && env.NODE_ENV === 'production') {
-    throw new Error('JWT_SECRET must be set and at least 16 chars in production');
+
+  if (isProduction) {
+    if (
+      !jwtSecret ||
+      jwtSecret.length < 16 ||
+      jwtSecret === 'change-me-to-a-long-random-string' ||
+      jwtSecret === 'dev-only-insecure-secret-change-me'
+    ) {
+      throw new Error('JWT_SECRET must be set and at least 16 chars in production');
+    }
+    const adminKey = env.SFU_ADMIN_KEY ?? '';
+    if (!adminKey || adminKey === 'examguard-dev-sfu-admin-key' || adminKey === 'change-me-sfu-admin-key') {
+      throw new Error('SFU_ADMIN_KEY must be set to a secure string in production and cannot use development default placeholders.');
+    }
   }
+
   return {
     port: Number(env.SFU_PORT ?? 4010),
     host: env.SFU_HOST ?? '127.0.0.1',

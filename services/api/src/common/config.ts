@@ -33,12 +33,23 @@ export class AppConfig {
     secretAccessKey: string;
     forcePathStyle: boolean;
   } {
+    const bucket = process.env.S3_BUCKET ?? process.env.STORAGE_BUCKET ?? '';
+    const region = process.env.S3_REGION ?? process.env.AWS_REGION ?? 'us-east-1';
+    const accessKeyId = process.env.S3_ACCESS_KEY_ID ?? process.env.AWS_ACCESS_KEY_ID ?? '';
+    const secretAccessKey = process.env.S3_SECRET_ACCESS_KEY ?? process.env.AWS_SECRET_ACCESS_KEY ?? '';
+
+    if (this.storageDriver === 's3' && process.env.NODE_ENV === 'production') {
+      if (!bucket) throw new Error('S3_BUCKET (or STORAGE_BUCKET) is required when STORAGE_DRIVER=s3 in production.');
+      if (!accessKeyId) throw new Error('S3_ACCESS_KEY_ID (or AWS_ACCESS_KEY_ID) is required when STORAGE_DRIVER=s3 in production.');
+      if (!secretAccessKey) throw new Error('S3_SECRET_ACCESS_KEY (or AWS_SECRET_ACCESS_KEY) is required when STORAGE_DRIVER=s3 in production.');
+    }
+
     return {
-      endpoint: process.env.S3_ENDPOINT || undefined,
-      region: process.env.S3_REGION ?? 'us-east-1',
-      bucket: process.env.S3_BUCKET ?? '',
-      accessKeyId: process.env.S3_ACCESS_KEY_ID ?? '',
-      secretAccessKey: process.env.S3_SECRET_ACCESS_KEY ?? '',
+      endpoint: process.env.S3_ENDPOINT || process.env.STORAGE_ENDPOINT || undefined,
+      region,
+      bucket,
+      accessKeyId,
+      secretAccessKey,
       forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true',
     };
   }

@@ -2,7 +2,7 @@ import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/commo
 import { CurrentUser, RequirePermissions } from '../common/decorators';
 import type { UserContext } from '../common/types';
 import { QuestionsService } from './questions.service';
-import { CreateBankDto, CreateQuestionDto, UpdateQuestionDto } from './dto';
+import { BulkImportQuestionsDto, CreateBankDto, CreateQuestionDto, UpdateQuestionDto } from './dto';
 
 @Controller('api/v1')
 export class QuestionsController {
@@ -33,11 +33,35 @@ export class QuestionsController {
     return this.questions.listQuestions(user, bankId);
   }
 
+  @Post('question-bank/:bankId/import')
+  @RequirePermissions('question:manage')
+  importInBank(@CurrentUser() user: UserContext, @Param('bankId') bankId: string, @Body() dto: BulkImportQuestionsDto) {
+    return this.questions.bulkImport(user, dto.questions, bankId);
+  }
+
+  @Get('question-bank/:bankId/export')
+  @RequirePermissions('question:read')
+  exportBank(@CurrentUser() user: UserContext, @Param('bankId') bankId: string) {
+    return this.questions.exportQuestions(user, bankId);
+  }
+
   // ---- Standalone questions ----
   @Post('questions')
   @RequirePermissions('question:manage')
   create(@CurrentUser() user: UserContext, @Body() dto: CreateQuestionDto) {
     return this.questions.createQuestion(user, dto);
+  }
+
+  @Post('questions/import')
+  @RequirePermissions('question:manage')
+  importStandalone(@CurrentUser() user: UserContext, @Body() dto: BulkImportQuestionsDto) {
+    return this.questions.bulkImport(user, dto.questions);
+  }
+
+  @Get('questions/export')
+  @RequirePermissions('question:read')
+  exportStandalone(@CurrentUser() user: UserContext) {
+    return this.questions.exportQuestions(user);
   }
 
   @Get('questions')

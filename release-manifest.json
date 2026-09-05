@@ -1,0 +1,39 @@
+{
+  "name": "ExamGuard",
+  "version": "0.3.0",
+  "buildTimestamp": "2026-09-05T19:26:00Z",
+  "gitCommit": "1e75825",
+  "artifacts": [
+    {
+      "platform": "windows",
+      "arch": "x64",
+      "filename": "ExamGuard Setup 0.3.0.exe",
+      "relativePath": "apps/student-desktop/dist/installer/ExamGuard Setup 0.3.0.exe",
+      "sha256": "be7a76f8b0fe51e32b7832700cdb5a77db3c15d0442db4ef5302fde1acc7f89d",
+      "size": 111851067,
+      "releaseDate": "2026-09-05",
+      "signed": false,
+      "signatureStatus": "UNSIGNED RELEASE CANDIDATE (No EV Code-Signing Certificate available)",
+      "downloadUrl": "https://github.com/siddharth-1118/Exam-Guard/releases/download/v0.3.0/ExamGuard-Setup-0.3.0.exe"
+    },
+    {
+      "platform": "macos",
+      "arch": "universal",
+      "filename": "ExamGuard-0.3.0.dmg",
+      "status": "Coming soon (Requires macOS build environment & Apple Developer Signing)",
+      "releaseDate": null
+    },
+    {
+      "platform": "linux",
+      "arch": "x64",
+      "filename": "ExamGuard-0.3.0.AppImage",
+      "status": "Coming soon (Requires Linux CI build environment)",
+      "releaseDate": null
+    }
+  ],
+  "readiness": {
+    "technicallyReady": true,
+    "deploymentReady": false,
+    "commercialProductionReady": false
+  }
+}

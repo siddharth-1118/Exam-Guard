@@ -84,6 +84,15 @@ export class QuestionsService {
     });
     if (!existing) throw new NotFoundException('Question not found');
 
+    const activeAttempts = await this.prisma.examAttempt.count({
+      where: {
+        exam: { questions: { some: { questionId } } },
+      },
+    });
+    if (activeAttempts > 0) {
+      throw new BadRequestException('Question cannot be modified because it is linked to an exam with student attempts');
+    }
+
     return this.prisma.$transaction(async (tx) => {
       const data: Record<string, unknown> = {};
       if (dto.text !== undefined) data.text = dto.text;
@@ -115,8 +124,93 @@ export class QuestionsService {
       where: { id: questionId, organizationId: user.orgId! },
     });
     if (!existing) throw new NotFoundException('Question not found');
+
+    const activeAttempts = await this.prisma.examAttempt.count({
+      where: {
+        exam: { questions: { some: { questionId } } },
+      },
+    });
+    if (activeAttempts > 0) {
+      throw new BadRequestException('Question cannot be deleted because it is linked to an exam with student attempts');
+    }
+
     await this.prisma.question.delete({ where: { id: questionId } });
     return { deleted: true };
+  }
+
+  async bulkImport(user: UserContext, dtos: CreateQuestionDto[], bankId?: string) {
+    if (bankId) {
+      const bank = await this.prisma.questionBank.findFirst({
+        where: { id: bankId, organizationId: user.orgId! },
+      });
+      if (!bank) throw new NotFoundException('Question bank not found');
+    }
+
+    const createdQuestions = await this.prisma.$transaction(async (tx) => {
+      const createdList = [];
+      for (const dto of dtos) {
+        const question = await tx.question.create({
+          data: {
+            organizationId: user.orgId!,
+            bankId: bankId ?? null,
+            type: dto.type as QuestionType,
+            text: dto.text,
+            marks: dto.marks ?? 1,
+            negativeMarks: dto.negativeMarks ?? 0,
+            difficulty: dto.difficulty ?? 'MEDIUM',
+            metadata: toJson(dto.metadata),
+            createdBy: user.userId,
+          },
+        });
+        if (dto.options?.length) {
+          await tx.questionOption.createMany({
+            data: dto.options.map((o, i) => ({
+              questionId: question.id,
+              text: o.text,
+              isCorrect: Boolean(o.isCorrect),
+              order: o.order ?? i + 1,
+            })),
+          });
+        }
+        createdList.push(question.id);
+      }
+      return createdList;
+    });
+
+    await this.prisma.auditLog.create({
+      data: {
+        organizationId: user.orgId!,
+        actorUserId: user.userId,
+        actorEmail: user.email,
+        action: 'questions.bulk-import',
+        resourceType: 'QuestionBank',
+        resourceId: bankId ?? 'standalone',
+        detail: { count: createdQuestions.length },
+      },
+    });
+
+    return { importedCount: createdQuestions.length, questionIds: createdQuestions };
+  }
+
+  async exportQuestions(user: UserContext, bankId?: string) {
+    const questions = await this.prisma.question.findMany({
+      where: { organizationId: user.orgId!, ...(bankId ? { bankId } : {}) },
+      include: { options: { orderBy: { order: 'asc' } } },
+      orderBy: { createdAt: 'asc' },
+    });
+    return questions.map((q) => ({
+      type: q.type,
+      text: q.text,
+      marks: q.marks,
+      negativeMarks: q.negativeMarks,
+      difficulty: q.difficulty,
+      metadata: q.metadata,
+      options: q.options.map((o) => ({
+        text: o.text,
+        isCorrect: o.isCorrect,
+        order: o.order,
+      })),
+    }));
   }
 
   private async withOptions(questionId: string) {

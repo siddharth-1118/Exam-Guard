@@ -2,7 +2,7 @@ import { Body, Controller, Get, Param, Patch, Post } from '@nestjs/common';
 import { CurrentUser, RequirePermissions } from '../common/decorators';
 import type { UserContext } from '../common/types';
 import { StudentsService } from './students.service';
-import { CreateStudentDto, UpdateStudentDto } from './dto';
+import { BulkImportStudentsDto, CreateStudentDto, UpdateStudentDto } from './dto';
 
 @Controller('api/v1/students')
 export class StudentsController {
@@ -18,6 +18,12 @@ export class StudentsController {
   @RequirePermissions('student:manage')
   create(@CurrentUser() user: UserContext, @Body() dto: CreateStudentDto) {
     return this.students.create(user, dto);
+  }
+
+  @Post('import')
+  @RequirePermissions('student:manage')
+  bulkImport(@CurrentUser() user: UserContext, @Body() dto: BulkImportStudentsDto) {
+    return this.students.bulkImport(user, dto.students);
   }
 
   @Patch(':id')

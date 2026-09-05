@@ -273,10 +273,10 @@ export class RecordingsService {
 
   /** Admin transition (no user context needed). */
   private async adminTransition(
-    row: Recording & { attempt: ExamAttempt },
+    row: RecordingWithAttempt,
     event: 'start' | 'finalize' | 'markReady' | 'fail' | 'delete',
     data: Record<string, unknown>,
-  ): Promise<Recording> {
+  ): Promise<RecordingWithAttempt> {
     const next = nextRecordingStatus(row.status, event);
     if (!next) throw new ConflictException(`Invalid transition: ${row.status} -> ${event}`);
     const result = await this.prisma.recording.updateMany({
@@ -284,10 +284,14 @@ export class RecordingsService {
       data: { ...data, status: next } as never,
     });
     if (result.count === 0) throw new ConflictException('Recording state changed concurrently');
-    const updated = await this.prisma.recording.findUnique({ where: { id: row.id } });
+    const updated = (await this.prisma.recording.findUnique({
+      where: { id: row.id },
+      include: { attempt: true },
+    })) as RecordingWithAttempt | null;
     if (!updated) throw new NotFoundException('Recording not found');
     return updated;
   }
+
 
   /** System-initiated audit row (no actor). */
   private async auditSystem(

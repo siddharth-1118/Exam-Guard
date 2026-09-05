@@ -1,71 +1,48 @@
-# ExamGuard Security Guide (C52)
+# ExamGuard Security & Integrity Architecture (Phase 11)
 
-## Authentication
+This document describes the security controls, context-isolated Electron architecture, authentication security, and platform boundary limits for ExamGuard.
 
-- JWT access tokens (15min default)
-- JWT refresh tokens (7 day default)
-- Token rotation on every refresh
-- Session revocation via `tokenVersion` bump
-- Password hashing: Argon2id/Bcrypt
-- Login throttling: 10/min per IP
+---
 
-## MFA (TOTP)
+## 1. Electron Security Configuration
 
-- Enrollment: `POST /auth/mfa/enroll` → QR code + backup codes
-- Verification: `POST /auth/mfa/verify` → TOTP or backup code
-- Backup codes: 10 one-time-use codes, SHA-256 hashed
-- Lockout: 5 failed attempts → 15min cooldown
-- Rate limiting: 5 attempts/min on verification
+ExamGuard Student Desktop enforces strict web security and renderer isolation guidelines:
 
-## RBAC
+| Property | Value | Security Effect |
+| :--- | :---: | :--- |
+| `contextIsolation` | `true` | Prevents renderer scripts from accessing Electron internal prototypes. |
+| `sandbox` | `true` | Runs renderer process inside OS-level Chromium sandbox without Node.js bindings. |
+| `nodeIntegration` | `false` | Disables Node.js `require()` and `process` access inside browser windows. |
+| `webSecurity` | `true` | Enforces same-origin policy, CORS, and strict web security rules. |
+| `allowRunningInsecureContent` | `false` | Blocks mixed HTTP content loading inside secure HTTPS renderer. |
 
-| Role | Key Permissions |
-|---|---|
-| SUPER_ADMIN | All permissions |
-| ORG_ADMIN | org:manage, student:manage, recording:manage |
-| EXAM_MANAGER | exam:create, question:manage, attempt:grade |
-| MONITOR | proctor:monitor, proctor:intervene, media:subscribe |
-| STUDENT | attempt:start, attempt:submit, media:publish |
+---
 
-## Multi-Tenancy
+## 2. Desktop Shortcut & Navigation Interception
 
-- `organizationId` on every query (server-enforced)
-- Cross-tenant access returns NotFound (never data)
-- Storage keys are tenant-scoped: `<orgId>/recordings/<id>/<kind>`
+The main Electron process (`apps/student-desktop/electron/main.ts`) intercepts input events and blocks unauthorized navigation:
 
-## Media Security
+- **Shortcut Key Interception**: Intercepts `F12`, `F5`, `Ctrl+Shift+I/C/J`, `Ctrl+U`, `Ctrl+R`, `Cmd+Alt+I`, `Cmd+R`.
+- **Navigation Lockdown**: Cancels `window.open()`, external URL navigations, and unauthorized redirects.
+- **Window Focus Monitoring**: Listens to window `blur` events; generates security focus-loss alerts sent directly to proctors.
+- **Display Topology Monitoring**: Detects multi-display connection/disconnection events during exam sessions.
 
-- Media tokens: 300s TTL, scoped to participant + role
-- SFU admin endpoints: protected by `x-sfu-admin-key`
-- Publisher authorization: verified at SFU join
-- Subscriber authorization: verified via exam monitor assignment
+---
 
-## Recording Security
+## 3. Honest Platform Lockdown Boundaries
 
-- Object keys: server-generated, tenant-scoped
-- Signed URLs: 300s TTL (S3 driver)
-- Integrity: SHA-256 checksum at finalization
-- Access: audited on every download
+> [!CAUTION]
+> **Application-Level vs OS-Level Lockdown Boundary**:
+> ExamGuard provides strong **application-level lockdown** within user-space Electron environment. However, without dedicated OS kernel drivers or Enterprise Kiosk Policy MDM management:
+> - Hardware power buttons, physical reset switches, and OS hard reboots cannot be intercepted by user-space apps.
+> - Low-level OS shortcuts such as Windows `Ctrl+Alt+Del`, `Win+L` lock screen, or macOS system overlay shortcuts cannot be blocked from standard un-elevated user accounts.
+> - External hardware video capture cards (HDMI splitters/capture cards) operating outside OS software layer cannot be detected via software API.
 
-## Desktop Security
+---
 
-- `contextIsolation: true`
-- `sandbox: true`
-- `nodeIntegration: false`
-- DevTools blocked
-- Navigation restricted
-- Token storage: `safeStorage.encrypt()` (OS keychain)
+## 4. Multi-Tenancy & Authentication Security
 
-## Secrets Management
-
-- All secrets via environment variables
-- No secrets in code, logs, or API responses
-- Audit interceptor redacts password/token/secret fields
-- Dev defaults clearly marked as unsafe
-
-## Privacy
-
-- Consent required before monitoring
-- GDPR export: `GET /privacy/export/:studentId`
-- GDPR deletion: `POST /privacy/delete/:studentId`
-- Audit logs preserved after deletion (legal compliance)
+- **JWT Tokens**: Access tokens (15m TTL), Refresh tokens (7d TTL), Token versioning for instant session revocation.
+- **Argon2id Hashing**: Password storage using Argon2id.
+- **Rate Limiting**: Login rate limiting (10 req/min per IP) via NestJS `CustomThrottlerGuard`.
+- **RBAC Enforcement**: Strict role authorization (`SUPER_ADMIN`, `ORG_ADMIN`, `EXAM_MANAGER`, `MONITOR`, `STUDENT`) with tenant scoping (`organizationId`).

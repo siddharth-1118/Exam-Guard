@@ -192,14 +192,22 @@ function createWindow(): void {
   // --- window hardening --------------------------------------------------
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   mainWindow.webContents.on('will-navigate', (event) => event.preventDefault());
-  if (!IS_DEV) {
-    // Disable keyboard shortcuts that open devtools or reload.
-    mainWindow.webContents.on('before-input-event', (event, input) => {
+  mainWindow.webContents.on('will-redirect', (event) => event.preventDefault());
+  
+  mainWindow.webContents.on('before-input-event', (event, input) => {
+    if (examModeActive || !IS_DEV) {
       const key = input.key.toLowerCase();
-      if (key === 'f12') event.preventDefault();
-      if ((input.control || input.meta) && (key === 'r' || key === 'shift+r')) event.preventDefault();
-    });
-  }
+      // Block F12, DevTools shortcuts (Ctrl+Shift+I, Ctrl+Shift+C, Ctrl+Shift+J), View Source (Ctrl+U), Reload (Ctrl+R, F5)
+      if (
+        key === 'f12' ||
+        key === 'f5' ||
+        ((input.control || input.meta) && (key === 'r' || key === 'u')) ||
+        ((input.control || input.meta) && input.shift && (key === 'i' || key === 'c' || key === 'j' || key === 'r'))
+      ) {
+        event.preventDefault();
+      }
+    }
+  });
 
   // Window close during a live attempt requires confirmation (and logs a focus
   // event — evidence, not accusation).

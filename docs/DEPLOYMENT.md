@@ -1,119 +1,89 @@
-# ExamGuard Deployment Guide (C52)
+# ExamGuard Deployment & Environment Guide (Phase 12 & 13)
 
-## Architecture Overview
+This document provides deployment guidelines for Local ₹0 testing, Staging, and Production environments.
+
+---
+
+## 1. Environment Separation Strategy
+
+ExamGuard enforces strict environment isolation to prevent dev/prod credential leakage and ensure reliable testing.
 
 ```
-Internet → Reverse Proxy (nginx) → API (port 4000)
-                                  → PostgreSQL (port 5432)
-                                  → Redis (port 6379)
-                                  → Media/SFU (port 4010)
-                                  → Recording Storage (local/S3)
-                                  → Monitor Portal (port 3001)
-                                  → Admin Portal (port 3002)
+                  +-----------------------------------+
+                  |         ENVIRONMENT MATRIX        |
+                  +-----------------------------------+
+
+     LOCAL (₹0 Setup)              STAGING                    PRODUCTION
+  +--------------------+    +--------------------+    +--------------------+
+  | Node / pnpm        |    | Docker Compose     |    | Cloud Containers   |
+  | Local PostgreSQL   |    | Staging Postgres   |    | AWS RDS Postgres   |
+  | Local Redis        |    | Redis Container    |    | AWS ElastiCache    |
+  | Local Storage      |    | Local / S3 Test    |    | AWS S3 Bucket      |
+  | Mediasoup (Local)  |    | Mediasoup (Host)   |    | SFU Cluster        |
+  +--------------------+    +--------------------+    +--------------------+
 ```
 
-## Prerequisites
+| Environment | Database URL | Media Target | Storage Driver | Node Mode |
+| :--- | :--- | :--- | :--- | :--- |
+| **Local (₹0)** | `postgresql://examguard:examguard@localhost:5433/examguard` | `ws://localhost:4010` | `STORAGE_DRIVER=local` | `NODE_ENV=development` |
+| **Staging** | `postgresql://user:pass@staging-db:5432/examguard` | `wss://staging-media.examguard.io` | `STORAGE_DRIVER=s3` | `NODE_ENV=production` |
+| **Production** | `postgresql://prod-user:secret@rds-host:5432/examguard` | `wss://media.examguard.io` | `STORAGE_DRIVER=s3` | `NODE_ENV=production` |
 
-- Node.js 20+
-- PostgreSQL 16+
-- Redis 7+
-- FFmpeg (for recording egress)
-- pnpm 9+
+---
 
-## Environment Variables
+## 2. Local ₹0 Development & Deployment
 
-| Variable | Required | Default | Description |
-|---|---|---|---|
-| `NODE_ENV` | Yes | `development` | Set to `production` |
-| `APP_ENV` | Yes | `development` | Set to `production` |
-| `DATABASE_URL` | Yes | - | PostgreSQL connection string |
-| `REDIS_URL` | Yes | - | Redis connection string |
-| `JWT_SECRET` | Yes | - | Min 16 chars in production |
-| `JWT_ACCESS_TTL` | No | 900 | Access token TTL (seconds) |
-| `JWT_REFRESH_TTL` | No | 604800 | Refresh token TTL (seconds) |
-| `CORS_ORIGINS` | No | localhost | Comma-separated allowed origins |
-| `SFU_URL` | Yes | - | WebSocket URL for SFU |
-| `SFU_ADMIN_KEY` | Yes | - | Internal admin key |
-| `STORAGE_DRIVER` | No | `local` | `local` or `s3` |
-| `S3_BUCKET` | If S3 | - | S3 bucket name |
-| `S3_ACCESS_KEY_ID` | If S3 | - | AWS access key |
-| `S3_SECRET_ACCESS_KEY` | If S3 | - | AWS secret key |
-| `API_PORT` | No | 4000 | API listen port |
-
-## Deployment Steps
-
-### 1. Database Setup
+The local environment requires **zero cloud costs** and relies entirely on local daemons:
 
 ```bash
-# Create database
-createdb examguard
+# 1. Start Local PostgreSQL (Port 5433)
+node scripts/dev-db.mjs start
 
-# Run migrations
-cd packages/database
-npx prisma migrate deploy
+# 2. Deploy Prisma Schema
+cd packages/database && npx prisma migrate deploy
 
-# Seed (development only!)
-npx prisma db seed
+# 3. Start SFU Media Server (Port 4010)
+pnpm --filter @examguard/media start:prod
+
+# 4. Start API Backend Service (Port 4000)
+$env:DATABASE_URL="postgresql://examguard:examguard@localhost:5433/examguard?schema=public"
+node services/api/dist/src/main.js
+
+# 5. Start Student Web Portal (Port 3001)
+pnpm --filter @examguard/student-web dev
 ```
 
-### 2. API Service
+---
+
+## 3. Production Docker Compose Deployment
 
 ```bash
-# Build
-cd services/api
-pnpm build
+# Build and launch production stack in background
+docker compose -f docker-compose.production.yml up -d
 
-# Start
-node dist/main.js
+# Verify container status
+docker compose -f docker-compose.production.yml ps
+
+# Execute smoke test script
+node scripts/production-smoke-test.mjs
 ```
 
-### 3. Media/SFU Service
+---
 
+## 4. Rollback Procedure & Operational Safety
+
+### Container Rollback
+If a newly deployed container image fails post-deployment health checks:
 ```bash
-# Build
-cd services/media
-pnpm build
-
-# Start
-node dist/index.js
+docker compose -f docker-compose.production.yml up -d --no-deps api media
 ```
 
-### 4. Health Checks
-
+### Database Recovery & Restore
+Take an explicit snapshot prior to schema migrations:
 ```bash
-# Liveness
-curl http://localhost:4000/health
-
-# Readiness
-curl http://localhost:4000/ready
-
-# Detailed readiness
-curl http://localhost:4000/ready/detailed
-
-# Metrics
-curl http://localhost:4000/metrics
+pg_dump -h $DB_HOST -U $DB_USER -d $DB_NAME -F c -b -v -f pre_deploy_backup.dump
 ```
-
-## Docker Deployment
-
+To restore a snapshot:
 ```bash
-# Build and start all services
-docker compose up -d
-
-# Check status
-docker compose ps
-
-# View logs
-docker compose logs -f api
+pg_restore -h $DB_HOST -U $DB_USER -d $DB_NAME --clean --if-exists pre_deploy_backup.dump
 ```
-
-## Production Considerations
-
-- Use a reverse proxy (nginx/HAProxy) for TLS termination
-- Use a managed PostgreSQL service (AWS RDS, GCP Cloud SQL)
-- Use a managed Redis service (AWS ElastiCache, GCP Memorystore)
-- Use S3 for recording storage in production
-- Enable PostgreSQL WAL archiving for point-in-time recovery
-- Configure monitoring (Prometheus + Grafana)
-- Set up alerting (PagerDuty, Slack)
-- Use a secrets manager (AWS Secrets Manager, HashiCorp Vault)

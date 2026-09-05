@@ -14,7 +14,101 @@ import { selectScreenSource } from '../shared/screenSource';
 // Re-exported for convenience so consumers do not import two layers.
 export type { DeviceKind } from '../shared/deviceController';
 
+declare global {
+  interface Window {
+    examguard?: import('../shared/types').DesktopBridge;
+  }
+}
+
 export type PermissionState = 'unknown' | 'granted' | 'denied' | 'unavailable';
+export type CameraClassification = 'physical-integrated' | 'physical-external' | 'virtual' | 'unknown';
+
+/** Known indicators for virtual camera software (case-insensitive regex). */
+const VIRTUAL_CAMERA_REGEX =
+  /(phone link|link to windows|windows phone|virtual camera|virtual|droidcam|obs|manycam|snap camera|xsplit|iriun|vcam|epoccam|camo|ivcam)/i;
+
+/** Known indicators for built-in/integrated laptop webcams (case-insensitive regex). */
+const BUILTIN_CAMERA_REGEX =
+  /(integrated|built-in|builtin|internal|laptop|facetime|front|user facing)/i;
+
+export function isVirtualCamera(label: string): boolean {
+  if (!label) return false;
+  return VIRTUAL_CAMERA_REGEX.test(label);
+}
+
+export function isBuiltInCamera(label: string): boolean {
+  if (!label) return false;
+  return BUILTIN_CAMERA_REGEX.test(label);
+}
+
+/**
+ * Classifies a videoinput device using label heuristics.
+ *
+ * NOTE: Chromium and Windows do not expose a universal, guaranteed physical-vs-virtual
+ * hardware flag on MediaDeviceInfo. Therefore, label heuristics serve as a deterministic
+ * preference mechanism rather than an absolute hardware assertion.
+ */
+export function classifyCameraDevice(device: { kind?: string; label?: string }): CameraClassification {
+  if (!device || (device.kind && device.kind !== 'videoinput')) {
+    return 'unknown';
+  }
+  const label = device.label || '';
+  if (!label) return 'unknown';
+
+  if (VIRTUAL_CAMERA_REGEX.test(label)) {
+    return 'virtual';
+  }
+  if (BUILTIN_CAMERA_REGEX.test(label)) {
+    return 'physical-integrated';
+  }
+  if (/(hd camera|hd webcam|fhd camera|usb camera|webcam|c920|brio|logitech|usb video|video device|camera)/i.test(label)) {
+    return 'physical-external';
+  }
+  return 'unknown';
+}
+
+/**
+ * Deterministic camera selection strategy:
+ *  1. FIRST: If userSelectedDeviceId is provided and exists in videoinputs, return that exact device.
+ *  2. Priority 1: physical-integrated
+ *  3. Priority 2: physical-external
+ *  4. Priority 3: unknown
+ *  5. Virtual cameras: DO NOT automatically select them (return null -> unavailable state).
+ */
+export function selectPreferredCamera(
+  devices: MediaDeviceInfo[] | Array<{ deviceId: string; kind: string; label: string }>,
+  userSelectedDeviceId?: string,
+): MediaDeviceInfo | null {
+  const videoInputs = devices.filter((d) => d.kind === 'videoinput') as MediaDeviceInfo[];
+  if (videoInputs.length === 0) return null;
+
+  // 1. Explicit user override
+  if (userSelectedDeviceId) {
+    const matched = videoInputs.find((d) => d.deviceId === userSelectedDeviceId);
+    if (matched) return matched;
+  }
+
+  // Classify devices
+  const classified = videoInputs.map((device) => ({
+    device,
+    classification: classifyCameraDevice(device),
+  }));
+
+  // Priority 1: physical-integrated
+  const integrated = classified.find((c) => c.classification === 'physical-integrated');
+  if (integrated) return integrated.device;
+
+  // Priority 2: physical-external
+  const external = classified.find((c) => c.classification === 'physical-external');
+  if (external) return external.device;
+
+  // Priority 3: unknown (unclassified, but not virtual)
+  const unknownPhysical = classified.find((c) => c.classification === 'unknown');
+  if (unknownPhysical) return unknownPhysical.device;
+
+  // Virtual cameras are NOT selected automatically
+  return null;
+}
 
 /** A live device stream owned by the renderer. */
 export interface LiveMedia {
@@ -26,13 +120,8 @@ export interface LiveMedia {
 }
 
 export type DeviceAcquireResult =
-  | { ok: true; handle: LiveMedia; deviceId?: string }
+  | { ok: true; handle: LiveMedia; deviceId?: string; label?: string }
   | { ok: false; reason: 'denied' | 'unavailable' | 'error' };
-
-const CAMERA_CONSTRAINTS: MediaStreamConstraints = {
-  audio: false,
-  video: { width: { ideal: 640 }, height: { ideal: 480 }, facingMode: 'user' },
-};
 
 const MIC_CONSTRAINTS: MediaStreamConstraints = { audio: true, video: false };
 
@@ -62,21 +151,142 @@ function makeHandle(kind: DeviceKind, stream: MediaStream): LiveMedia {
   };
 }
 
-export async function acquireDevice(kind: DeviceKind): Promise<DeviceAcquireResult> {
+export async function acquireDevice(
+  kind: DeviceKind,
+  selectedDeviceId?: string,
+): Promise<DeviceAcquireResult> {
   if (!navigator.mediaDevices?.getUserMedia) {
     return { ok: false, reason: 'unavailable' };
   }
-  const constraints = kind === 'camera' ? CAMERA_CONSTRAINTS : MIC_CONSTRAINTS;
+  if (kind === 'microphone') {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia(MIC_CONSTRAINTS);
+      const handle = makeHandle(kind, stream);
+      const deviceId = stream.getAudioTracks()[0]?.getSettings().deviceId;
+      return { ok: true, handle, deviceId };
+    } catch (err) {
+      return { ok: false, reason: reasonFromError(err) };
+    }
+  }
+
+  // Camera acquisition with physical webcam preference
   try {
-    const stream = await navigator.mediaDevices.getUserMedia(constraints);
-    const handle = makeHandle(kind, stream);
-    const deviceId = (
-      kind === 'camera' ? stream.getVideoTracks() : stream.getAudioTracks()
-    )[0]?.getSettings().deviceId;
-    return { ok: true, handle, deviceId };
+    let devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+    let videoInputs = devices.filter((d) => d.kind === 'videoinput');
+
+    // Handle unpopulated device labels (pre-permission in Chromium)
+    if (videoInputs.length === 0 || videoInputs.every((d) => !d.label)) {
+      try {
+        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+        tempStream.getTracks().forEach((t) => t.stop());
+        devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+        videoInputs = devices.filter((d) => d.kind === 'videoinput');
+      } catch (err) {
+        return { ok: false, reason: reasonFromError(err) };
+      }
+    }
+
+    const selectedCamera = selectPreferredCamera(videoInputs, selectedDeviceId);
+    if (!selectedCamera) {
+      return { ok: false, reason: 'unavailable' };
+    }
+
+    const cameraConstraints: MediaStreamConstraints = {
+      audio: false,
+      video: {
+        deviceId: { exact: selectedCamera.deviceId },
+        width: { ideal: 640 },
+        height: { ideal: 480 },
+      },
+    };
+
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia(cameraConstraints);
+    } catch (err) {
+      // Fallback: If exact device failed and no user override was set, try another physical camera
+      if (!selectedDeviceId && videoInputs.length > 1) {
+        const remaining = videoInputs.filter((d) => d.deviceId !== selectedCamera.deviceId);
+        const fallback = selectPreferredCamera(remaining);
+        if (fallback) {
+          stream = await navigator.mediaDevices.getUserMedia({
+            audio: false,
+            video: {
+              deviceId: { exact: fallback.deviceId },
+              width: { ideal: 640 },
+              height: { ideal: 480 },
+            },
+          });
+        } else {
+          return { ok: false, reason: reasonFromError(err) };
+        }
+      } else {
+        return { ok: false, reason: reasonFromError(err) };
+      }
+    }
+
+    const handle = makeHandle('camera', stream);
+    const actualTrack = stream.getVideoTracks()[0];
+    const actualDeviceId = actualTrack?.getSettings().deviceId ?? selectedCamera.deviceId;
+    const actualLabel = selectedCamera.label || actualTrack?.label || 'Camera';
+    const classification = classifyCameraDevice(selectedCamera);
+    const selectionReason = selectedDeviceId
+      ? 'user_selected'
+      : classification === 'physical-integrated'
+      ? 'preferred_integrated'
+      : classification === 'physical-external'
+      ? 'preferred_external'
+      : 'unknown_fallback';
+
+    console.log('[camera] CAMERA_DEVICE_SELECTED', {
+      deviceId: actualDeviceId ? actualDeviceId.slice(0, 8) + '...' : 'unknown',
+      label: actualLabel,
+      classification,
+      selectionReason,
+    });
+
+    return { ok: true, handle, deviceId: actualDeviceId, label: actualLabel };
   } catch (err) {
     return { ok: false, reason: reasonFromError(err) };
   }
+}
+
+/** Enumerate available camera devices with classification metadata. */
+export async function getAvailableCameras(): Promise<
+  Array<{
+    deviceId: string;
+    label: string;
+    classification: CameraClassification;
+    isVirtual: boolean;
+    isBuiltIn: boolean;
+    isPreferred: boolean;
+  }>
+> {
+  if (!navigator.mediaDevices?.enumerateDevices) return [];
+  let devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  let videoInputs = devices.filter((d) => d.kind === 'videoinput');
+
+  if (videoInputs.length === 0 || videoInputs.every((d) => !d.label)) {
+    try {
+      const tempStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      tempStream.getTracks().forEach((t) => t.stop());
+      devices = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+      videoInputs = devices.filter((d) => d.kind === 'videoinput');
+    } catch {}
+  }
+
+  const preferred = selectPreferredCamera(videoInputs);
+  return videoInputs.map((d) => {
+    const classification = classifyCameraDevice(d);
+    return {
+      deviceId: d.deviceId,
+      label: d.label || `Camera (${d.deviceId.slice(0, 6)})`,
+      classification,
+      isVirtual: classification === 'virtual',
+      isBuiltIn: classification === 'physical-integrated',
+      isPreferred: preferred?.deviceId === d.deviceId,
+    };
+  });
 }
 
 /**
@@ -87,6 +297,7 @@ export async function acquireDevice(kind: DeviceKind): Promise<DeviceAcquireResu
 export interface BrowserEnvDeps {
   report(payload: SensorEventPayload): void;
   updateSession(kind: SessionKind, status: MediaSessionUpdate['status']): void;
+  selectedCameraId?: string;
 }
 
 export interface BrowserExamEnv extends ExamDeviceEnv {
@@ -105,12 +316,14 @@ export function createBrowserExamEnv(deps: BrowserEnvDeps): BrowserExamEnv {
       // Screen capture is a different real path (Electron desktopCapturer +
       // a chromeMediaSource getUserMedia) than camera/microphone.
       const res =
-        kind === 'screen' ? await acquireScreenSource() : await acquireDevice(kind);
+        kind === 'screen'
+          ? await acquireScreenSource()
+          : await acquireDevice(kind, deps.selectedCameraId);
       if (res.ok) {
         live.set(kind, res.handle);
         const cb = endedCbs.get(kind);
         if (cb) res.handle.onEnded(cb);
-        return { ok: true, deviceId: res.deviceId };
+        return { ok: true, deviceId: res.deviceId, label: res.label };
       }
       return { ok: false, reason: res.reason };
     },
@@ -185,11 +398,14 @@ export async function probeAvailability(): Promise<{
 }
 
 /** One-shot preflight check for a device: acquire, verify, release. */
-export async function preflightDevice(kind: DeviceKind): Promise<AcquireOutcome> {
-  const res = await acquireDevice(kind);
+export async function preflightDevice(
+  kind: DeviceKind,
+  selectedDeviceId?: string,
+): Promise<AcquireOutcome> {
+  const res = await acquireDevice(kind, selectedDeviceId);
   if (res.ok) {
     res.handle.stop();
-    return { ok: true, deviceId: res.deviceId };
+    return { ok: true, deviceId: res.deviceId, label: res.label };
   }
   return { ok: false, reason: res.reason };
 }

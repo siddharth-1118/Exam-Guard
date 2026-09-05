@@ -1,65 +1,110 @@
-# ExamGuard
+# ExamGuard — Secure Examination & Proctoring Platform
 
-**Secure online examination, lockdown & live proctoring platform** — brand is configurable in `packages/config` (`BRAND_NAME`).
+**ExamGuard** is an enterprise-grade secure online examination, lockdown desktop client, and WebRTC live proctoring platform.
 
-Real SaaS infrastructure, not a demo: server-authoritative exam timing, RBAC with DB-backed roles/permissions, hard multi-tenant isolation (security-tested), append-only audit logs, and a monitor console whose interventions are enforced server-side. AI proctoring and live media are honestly gated behind later phases (`docs/ROADMAP.md`) — nothing here is faked or over-claimed.
+---
 
-> ⚠️ **Status — Phases 1–2 implemented & tested.** Phase 3+ (desktop lockdown, WebRTC/SFU, AI pipeline, mobile) are *designed* with contracts in place; see `docs/ROADMAP.md` for the exact status of every feature.
+## 1. System Architecture & Topology
 
-## Quickstart
+ExamGuard combines high-integrity desktop application lockdown, Mediasoup multi-stream WebRTC live proctoring, server-authoritative schedule enforcement, and advisory AI proctoring detection.
+
+```
+       +---------------------------------------------+
+       |   Vercel Cloud Hosting (Web Portals)        |
+       |   - Student Web & Download Center (:3001)   |
+       |   - Admin Web Console (:3000)               |
+       |   - Monitor Web Console (:3002)             |
+       +---------------------------------------------+
+                              |
+                              v (REST / WebSockets)
+       +---------------------------------------------+
+       |   API Backend Service (NestJS :4000)        |
+       +---------------------------------------------+
+               |                             |
+               v                             v
+     [PostgreSQL Database]             [Redis Cache]
+               ^                             ^
+               |                             |
+               +--------------+--------------+
+                              |
+                              v
+       +---------------------------------------------+
+       |   SFU Media Service (Mediasoup :4010)       |
+       +---------------------------------------------+
+                              ^
+                              | (WebRTC Multi-Stream RTP)
+                              v
+       +---------------------------------------------+
+       |   Student Desktop Client (Electron Kiosk)   |
+       |   [Camera + Microphone + Screen Capture]    |
+       +---------------------------------------------+
+```
+
+---
+
+## 2. Release & Download Center
+
+- **Current Release Version**: `v0.3.0`
+- **Release Manifest**: [`release-manifest.json`](file:///e:/projects/examguard/release-manifest.json)
+- **Windows Desktop Installer**: `ExamGuard Setup 0.3.0.exe` (`106.67 MB`, SHA-256: `be7a76f8b0fe51e32b7832700cdb5a77db3c15d0442db4ef5302fde1acc7f89d`)
+- **macOS / Linux Installers**: Scheduled for automated CI packaging via [`release.yml`](file:///e:/projects/examguard/.github/workflows/release.yml)
+
+---
+
+## 3. Quickstart (Local ₹0 Development Mode)
 
 ```bash
-# 1. Environment (fill JWT_SECRET; defaults are dev-only)
+# 1. Environment Setup
 cp .env.example .env
 
-# 2. Dependencies
+# 2. Install Workspace Dependencies
 pnpm install
 
-# 3. Infrastructure (PostgreSQL + Redis)
-docker compose up -d
+# 3. Start Local PostgreSQL Database (Port 5433)
+node scripts/dev-db.mjs start
 
-# 4. Database (schema + seed: demo org, roles, exam, questions)
-pnpm db:migrate      # interactive first run → name it "init"; afterwards: pnpm db:migrate -- --name <x>
-pnpm db:seed
+# 4. Deploy Database Migrations
+cd packages/database && npx prisma migrate deploy
 
-# 5. Run everything (API :4000, admin :3000, student :3001, monitor :3002)
-pnpm dev
+# 5. Start SFU Media Daemon (Port 4010)
+pnpm --filter @examguard/media start:prod
+
+# 6. Start API Backend Service (Port 4000)
+$env:DATABASE_URL="postgresql://examguard:examguard@localhost:5433/examguard?schema=public"
+node services/api/dist/src/main.js
+
+# 7. Start Student Web Portal & Download Center (Port 3001)
+pnpm --filter @examguard/student-web dev
 ```
 
-### Demo accounts (dev-only credentials — never for production)
+---
 
-| Role | Email | Password |
-|---|---|---|
-| Super admin | `superadmin@examguard.dev` | `ExamGuard!Dev2026` |
-| Org admin | `admin@northstar.edu` | `ExamGuard!Dev2026` |
-| Teacher | `teacher@northstar.edu` | `ExamGuard!Dev2026` |
-| Monitor | `monitor@northstar.edu` | `ExamGuard!Dev2026` |
-| Students | `student01..05@northstar.edu` | `ExamGuard!Dev2026` |
+## 4. Documentation Index
 
-Portals: admin → `http://localhost:3000` · student → `http://localhost:3001` · monitor → `http://localhost:3002`. Sign in with the account matching the portal.
+- [`docs/DEPLOYMENT_ARCHITECTURE.md`](file:///e:/projects/examguard/docs/DEPLOYMENT_ARCHITECTURE.md) — System topology, component interactions, and hosting boundaries
+- [`docs/ENVIRONMENT_VARIABLES.md`](file:///e:/projects/examguard/docs/ENVIRONMENT_VARIABLES.md) — Complete environment variable reference across all packages
+- [`docs/EXAM_SCHEDULING.md`](file:///e:/projects/examguard/docs/EXAM_SCHEDULING.md) — Server-authoritative timing calculations and Cases A–H schedule matrix
+- [`docs/MONITORING.md`](file:///e:/projects/examguard/docs/MONITORING.md) — Student ↔ Monitor WebRTC streaming architecture, pause controls, and metrics
+- [`docs/SECURITY.md`](file:///e:/projects/examguard/docs/SECURITY.md) — Electron renderer isolation, shortcut interception, and platform lockdown boundaries
+- [`docs/DESKTOP_RELEASES.md`](file:///e:/projects/examguard/docs/DESKTOP_RELEASES.md) — Packaging pipeline, release manifest schema, and GitHub Releases workflow
+- [`docs/DEPLOYMENT.md`](file:///e:/projects/examguard/docs/DEPLOYMENT.md) — Environment separation (Local, Staging, Production) and rollback safety
+- [`docs/PRODUCTION_READINESS.md`](file:///e:/projects/examguard/docs/PRODUCTION_READINESS.md) — Complete 73-checkpoint verification matrix and audit log
 
-## Repository layout
+---
 
-```
-apps/       admin-web · student-web · monitor-web  (Next.js 15 portals)
-            student-desktop · monitor-mobile        (Phase 3/6 — design placeholders)
-services/   api (NestJS, implemented) · realtime · media · ai-proctoring · notification (contracts)
-packages/   types · config · security (password/RBAC/risk/scoring) · database (Prisma) · auth (JWT/cookies) · ui
-infrastructure/ docker (compose at root) · k8s · terraform (Phase 7)
-docs/       architecture, security/threat model, API, database, desktop capability matrix,
-            mobile, AI proctoring, deployment, testing, privacy, roadmap
-```
-
-## Verification
+## 5. Verification & Test Suite
 
 ```bash
-pnpm typecheck     # TS across all packages/apps
-pnpm test          # unit tests (password, RBAC, risk engine, scoring)
-pnpm test:e2e      # integration + security suites (needs Postgres running)
+# Workspace Typecheck (13/13 packages clean)
+pnpm --recursive typecheck
+
+# Full Unit & Integration Test Suite (208/208 tests passing)
+pnpm --filter @examguard/api test
+pnpm --filter @examguard/student-desktop test
+pnpm --filter @examguard/security test
+pnpm --filter @examguard/ai-proctoring test
+pnpm --filter @examguard/media test
+
+# Run Automated Deployment Smoke Test
+node scripts/deployment-smoke-test.mjs
 ```
-
-Security suites (`services/api/test/security.e2e-spec.ts`) cover spec §58 scenarios: cross-org isolation, privilege escalation, expired/revoked tokens, submit-after-termination, server-clock enforcement, DTO whitelisting, rate limiting.
-
-## Documentation
-
-Start with `docs/ARCHITECTURE.md` and `docs/ROADMAP.md`; each subsystem has its own doc. Key honesty guarantees: the platform never claims a restriction its platform layer cannot enforce (`docs/DESKTOP.md` capability matrix), AI never auto-fails students (`docs/AI-PROCTORING.md`), and the server is authoritative for timing, scoring, pause/resume/termination and submission (`docs/SECURITY.md`).

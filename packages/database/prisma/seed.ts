@@ -60,6 +60,10 @@ async function upsertUser(email: string, firstName: string, lastName: string) {
 }
 
 async function main() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_DEV_SEED !== 'true') {
+    throw new Error('Refusing to run development seed in production. Set ALLOW_DEV_SEED=true to override.');
+  }
+
   console.log('Seeding ExamGuard dev environment…');
 
   const roleIds = await seedRoles();

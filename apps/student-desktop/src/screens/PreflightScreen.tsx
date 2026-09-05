@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { bridge } from '../lib/bridge';
-import { preflightDevice, preflightScreenSource, probeAvailability } from '../media/devices';
+import { getAvailableCameras, preflightDevice, preflightScreenSource, probeAvailability } from '../media/devices';
 import type { AssignedExam, ExamSettingsLike } from '../shared/types';
 
 /**
@@ -68,11 +68,15 @@ export function PreflightScreen({
   const [rows, setRows] = useState<CheckRow[]>([]);
   const [running, setRunning] = useState(true);
   const [consentChecked, setConsentChecked] = useState(false);
+  const [availableCameras, setAvailableCameras] = useState<
+    Array<{ deviceId: string; label: string; isVirtual: boolean; isBuiltIn: boolean; isPreferred: boolean }>
+  >([]);
+  const [selectedCameraId, setSelectedCameraId] = useState<string | undefined>(undefined);
 
   const patchRow = (key: string, patch: Partial<CheckRow>) =>
     setRows((prev) => prev.map((r) => (r.key === key ? { ...r, ...patch } : r)));
 
-  async function runChecks() {
+  async function runChecks(targetCameraId?: string) {
     setRunning(true);
     setRows([
       { key: 'network', label: 'Network', detail: online ? 'Connected to ExamGuard' : 'Offline', status: online ? 'pass' : 'fail', blocking: true },
@@ -81,11 +85,13 @@ export function PreflightScreen({
       { key: 'screen', label: 'Screen capture', detail: 'Checking…', status: 'pending', blocking: screenReq },
     ]);
 
+    const activeCamId = targetCameraId ?? selectedCameraId;
+
     // Camera — live acquire + release when required, presence probe otherwise.
     if (cameraReq) {
-      const res = await preflightDevice('camera');
+      const res = await preflightDevice('camera', activeCamId);
       if (res.ok) {
-        patchRow('camera', { status: 'pass', detail: 'Camera ready' });
+        patchRow('camera', { status: 'pass', detail: res.label ? `Camera ready (${res.label})` : 'Camera ready' });
       } else {
         patchRow('camera', { status: 'fail', detail: reasonLabel(res.reason, 'Camera') });
       }
@@ -96,6 +102,13 @@ export function PreflightScreen({
         status: state,
         detail: state === 'pass' ? 'Camera available (not required)' : 'No camera found (not required)',
       });
+    }
+
+    const cams = await getAvailableCameras();
+    setAvailableCameras(cams);
+    if (!activeCamId && cams.length > 0) {
+      const pref = cams.find((c) => c.isPreferred) ?? cams[0];
+      if (pref) setSelectedCameraId(pref.deviceId);
     }
 
     // Microphone — same treatment.
@@ -165,10 +178,16 @@ export function PreflightScreen({
       camera: cameraReq && cameraOk,
       microphone: micReq && micOk,
       screen: screenReq && screenOk,
+      selectedCameraId,
       screenAccepted: screenReq,
       acceptedAt: new Date().toISOString(),
     });
   }
+
+  const handleCameraChange = (deviceId: string) => {
+    setSelectedCameraId(deviceId);
+    void runChecks(deviceId);
+  };
 
   return (
     <div className="page">

@@ -47,6 +47,7 @@ export function startServer(sfu: SfuService, config: SfuConfig): Promise<SfuServ
         let body = '';
         req.on('data', (chunk: Buffer) => { body += String(chunk); if (body.length > 4096) req.destroy(); });
         req.on('end', async () => {
+          Logger.info(`[admin] Received POST /admin/recording/start: ${body}`);
           let parsed: Record<string, unknown>;
           try { parsed = body ? (JSON.parse(body) as Record<string, unknown>) : {}; }
           catch { res.writeHead(400, { 'Content-Type': 'application/json' }); res.end(JSON.stringify({ error: 'invalid body' })); return; }
@@ -59,9 +60,11 @@ export function startServer(sfu: SfuService, config: SfuConfig): Promise<SfuServ
             return;
           }
           const result = await sfu.startRecording(pid, rid, key);
+          Logger.info(`[admin] startRecording finished: started=${result.started}, error=${result.error ?? 'none'}`);
           res.writeHead(result.started ? 200 : 409, { 'Content-Type': 'application/json' });
           res.end(JSON.stringify(result));
         });
+        req.resume();
         return;
       }
       if (url === '/admin/recording/stop' && (req.method ?? 'GET') === 'POST') {

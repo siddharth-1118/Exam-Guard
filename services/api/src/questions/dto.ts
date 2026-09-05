@@ -96,3 +96,11 @@ export class CreateBankDto {
   @Length(0, 1000)
   description?: string;
 }
+
+export class BulkImportQuestionsDto {
+  @IsArray()
+  @ArrayMaxSize(200)
+  @ValidateNested({ each: true })
+  @Type(() => CreateQuestionDto)
+  questions!: CreateQuestionDto[];
+}

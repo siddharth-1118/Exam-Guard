@@ -801,6 +801,7 @@ model Recording {
   @@index([organizationId, status])
   @@index([attemptId])
   @@index([examId, status])
+  @@index([retentionUntil])
 }
 
 model Evidence {
@@ -836,6 +837,7 @@ model AuditLog {
 
   @@index([organizationId, createdAt])
   @@index([actorUserId, createdAt])
+  @@index([resourceType, resourceId])
 }
 
 model Notification {

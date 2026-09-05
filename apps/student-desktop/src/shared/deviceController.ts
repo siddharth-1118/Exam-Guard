@@ -21,7 +21,7 @@ export type SessionKind = 'CAMERA' | 'MICROPHONE' | 'SCREEN';
 export type DeviceStatus = 'idle' | 'starting' | 'on' | 'off' | 'error';
 
 export type AcquireOutcome =
-  | { ok: true; deviceId?: string }
+  | { ok: true; deviceId?: string; label?: string }
   | { ok: false; reason: 'denied' | 'unavailable' | 'error' };
 
 export interface ExamDeviceEnv {

@@ -1,73 +1,65 @@
-# ExamGuard Monitoring & Alerting Contract (C51)
+# ExamGuard Live Proctoring & System Monitoring (Phase 9 & 10)
 
-## Metrics Endpoint
+This document describes both the real-time proctor monitoring console architecture (Student ↔ SFU ↔ Monitor connection) and system health metrics.
+
+---
+
+## 1. Student ↔ Monitor Streaming Architecture
+
+```
+Student Desktop Client
+  │ (WebRTC Multi-Stream RTP)
+  ├── Webcam Stream Producer
+  ├── Microphone Stream Producer
+  └── Screen Share Stream Producer
+        │
+        v
+  Mediasoup SFU Server Daemon (Port 4010)
+        │
+        v (WebRTC Consumer RTP)
+  Proctor Monitor Web Console (apps/monitor-web)
+        │
+        ├── Real-time Candidate Video Grid
+        ├── Focus & Active Screen View
+        ├── Live Audio Level Indicator
+        ├── Security Risk Score (0-100)
+        └── Real-time AI Proctoring Event Stream
+```
+
+---
+
+## 2. Proctor Control Actions & Pause Durations
+
+Authorized proctors monitoring an active exam session can execute server-authoritative control actions:
+
+| Action | Endpoint | Audit Action | Server Behavior |
+| :--- | :--- | :--- | :--- |
+| **Pause Exam** | `POST /api/v1/monitoring/students/:id/pause` | `attempt.paused` | Sets `pausedAt = new Date()`. Student exam timer freezes; answer submissions are rejected with `HTTP 400: Attempt is paused`. |
+| **Resume Exam** | `POST /api/v1/monitoring/students/:id/resume` | `attempt.resumed` | Folds paused duration into `accumulatedPausedSeconds`. Student exam unfreezes; attempt returns to `ACTIVE`. |
+| **Terminate Exam** | `POST /api/v1/monitoring/students/:id/terminate` | `attempt.terminated` | Sets status to `TERMINATED`. Disconnects media streams and locks candidate from further attempt activity. |
+| **Send Message** | `POST /api/v1/monitoring/students/:id/message` | `proctor.message` | Sends high-priority text notification modal directly to candidate desktop screen via WebSocket. |
+| **Flag Incident** | `POST /api/v1/monitoring/students/:id/flag` | `proctor.flag` | Attaches security flag and advisory note to candidate attempt record for post-exam review. |
+
+### Supported Pause Durations
+- **30 seconds** (Brief identity verification pause)
+- **1 minute** (Environment check pause)
+- **5 minutes** (Network recovery pause)
+- **10 minutes** (Formal proctor review pause)
+- **Custom duration** (Specified by proctor in minutes)
+
+---
+
+## 3. Metrics Endpoint & Prometheus Monitoring
 
 ExamGuard exposes Prometheus-compatible metrics at `GET /metrics`.
 
-### Available Metrics
-
 | Metric | Type | Description |
-|---|---|---|
+| :--- | :--- | :--- |
 | `examguard_http_requests_total` | counter | Total HTTP requests by method, route, status |
 | `examguard_http_request_duration_seconds` | histogram | Request latency distribution |
 | `examguard_attempts_active` | gauge | Currently active exam attempts |
-| `examguard_media_participants` | gauge | Active media participants |
+| `examguard_media_participants` | gauge | Active media participants connected to SFU |
 | `examguard_recordings_active` | gauge | Active recording sessions |
 | `examguard_redis_health` | gauge | Redis connectivity (1=healthy, 0=unhealthy) |
 | `examguard_auth_failures_total` | counter | Failed authentication attempts |
 | `examguard_mfa_failures_total` | counter | Failed MFA verification attempts |
-
-### Label Policy
-
-Labels are bounded and never include high-cardinality values:
-- ❌ studentId, email, IP, recordingId, attemptId
-- ✅ method, route (normalized), status, role
-
-## Alert Rules
-
-### CRITICAL Alerts
-
-| Alert | Condition | Operator Action |
-|---|---|---|
-| API Unavailable | `/health` fails for >1min | Restart API service, check logs |
-| Database Unavailable | `/ready` reports DB down | Check PostgreSQL, restore if needed |
-| Redis Unavailable | `examguard_redis_health = 0` for >5min | Check Redis, restart if needed |
-| SFU Unavailable | Media service health fails | Restart media service |
-| Recording Failure Spike | `recordings_failed` increases rapidly | Check FFmpeg, storage, network |
-| Storage Failure | Recording finalization fails repeatedly | Check disk space, S3 credentials |
-
-### WARNING Alerts
-
-| Alert | Condition | Operator Action |
-|---|---|---|
-| Elevated API Latency | p95 > 500ms for >5min | Check database queries, connection pool |
-| Elevated 5xx | Error rate > 5% for >5min | Check logs, identify failing endpoints |
-| Elevated Reconnects | Media reconnects spike | Check network stability |
-| Recording Finalization Delay | Finalization > 30s | Check FFmpeg, storage I/O |
-| High CPU/Memory | > 80% for >10min | Scale horizontally or investigate |
-| Disk Usage | > 85% | Clean old recordings, expand storage |
-
-## Dashboard Recommendations
-
-### Grafana Dashboards
-
-1. **API Overview**: Request rate, latency, error rate, active attempts
-2. **Media Health**: Participants, reconnects, SFU rooms, producers/consumers
-3. **Recording Pipeline**: Active recordings, finalization time, failures
-4. **Security**: Auth failures, MFA failures, rate limiting activity
-5. **Infrastructure**: Redis health, database connections, disk usage
-
-## Escalation
-
-| Severity | Response Time | Escalation |
-|---|---|---|
-| CRITICAL | < 15 min | Page on-call engineer |
-| WARNING | < 1 hour | Notify team channel |
-| INFO | Next business day | Log for review |
-
-## Log Retention
-
-- Application logs: 30 days
-- Audit logs: 1 year (legal compliance)
-- Metrics: 90 days (Prometheus/tsdb retention)
-- Recordings: Per exam retention policy (default 90 days)

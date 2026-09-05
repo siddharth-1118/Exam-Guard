@@ -50,11 +50,33 @@ export default function MonitorBoard() {
     return () => clearInterval(t);
   }, [load]);
 
+  const [search, setSearch] = useState('');
+  const [filterRisk, setFilterRisk] = useState<string>('ALL');
+  const [page, setPage] = useState(1);
+  const pageSize = 24;
+
   const counts = {
     critical: students.filter((s) => s.riskLevel === 'CRITICAL' || s.status === 'TERMINATED').length,
     suspicious: students.filter((s) => s.riskLevel === 'SUSPICIOUS' || s.status === 'PAUSED' || s.status === 'DISCONNECTED').length,
     normal: students.filter((s) => !['CRITICAL', 'SUSPICIOUS', 'PAUSED', 'DISCONNECTED', 'TERMINATED'].includes(s.riskLevel) && !['PAUSED', 'DISCONNECTED', 'TERMINATED'].includes(s.status) || s.status === 'ACTIVE').length,
   };
+
+  const filteredStudents = students.filter((s) => {
+    const matchesSearch =
+      !search ||
+      s.studentName.toLowerCase().includes(search.toLowerCase()) ||
+      s.studentCode.toLowerCase().includes(search.toLowerCase());
+    const matchesRisk =
+      filterRisk === 'ALL' ||
+      (filterRisk === 'CRITICAL' && (s.riskLevel === 'CRITICAL' || s.status === 'TERMINATED')) ||
+      (filterRisk === 'SUSPICIOUS' && (s.riskLevel === 'SUSPICIOUS' || s.status === 'PAUSED' || s.status === 'DISCONNECTED')) ||
+      (filterRisk === 'NORMAL' && s.riskLevel === 'NORMAL');
+    return matchesSearch && matchesRisk;
+  });
+
+  const totalPages = Math.ceil(filteredStudents.length / pageSize) || 1;
+  const currentPage = Math.min(page, totalPages);
+  const paginatedStudents = filteredStudents.slice((currentPage - 1) * pageSize, currentPage * pageSize);
 
   const gridCols =
     grid === '2' ? 'sm:grid-cols-2' : grid === '3' ? 'sm:grid-cols-2 lg:grid-cols-3' : 'sm:grid-cols-2 lg:grid-cols-4';
@@ -82,24 +104,78 @@ export default function MonitorBoard() {
       />
 
       <div className="mb-4 grid grid-cols-3 gap-3">
-        <div className="rounded-xl border border-red-900/50 bg-red-950/40 p-4">
+        <div
+          onClick={() => { setFilterRisk('CRITICAL'); setPage(1); }}
+          className="cursor-pointer rounded-xl border border-red-900/50 bg-red-950/40 p-4 transition-colors hover:border-red-600"
+        >
           <p className="text-2xl font-bold text-red-400">{counts.critical}</p>
           <p className="text-xs uppercase tracking-wide text-red-300/70">🔴 Critical</p>
         </div>
-        <div className="rounded-xl border border-amber-900/50 bg-amber-950/30 p-4">
+        <div
+          onClick={() => { setFilterRisk('SUSPICIOUS'); setPage(1); }}
+          className="cursor-pointer rounded-xl border border-amber-900/50 bg-amber-950/30 p-4 transition-colors hover:border-amber-600"
+        >
           <p className="text-2xl font-bold text-amber-400">{counts.suspicious}</p>
           <p className="text-xs uppercase tracking-wide text-amber-300/70">🟡 Suspicious</p>
         </div>
-        <div className="rounded-xl border border-emerald-900/50 bg-emerald-950/30 p-4">
+        <div
+          onClick={() => { setFilterRisk('NORMAL'); setPage(1); }}
+          className="cursor-pointer rounded-xl border border-emerald-900/50 bg-emerald-950/30 p-4 transition-colors hover:border-emerald-600"
+        >
           <p className="text-2xl font-bold text-emerald-400">{counts.normal}</p>
           <p className="text-xs uppercase tracking-wide text-emerald-300/70">🟢 Normal</p>
         </div>
       </div>
 
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-xl border border-slate-800 bg-slate-900 p-3">
+        <div className="flex flex-1 items-center gap-3">
+          <input
+            type="text"
+            placeholder="Search student name or code..."
+            value={search}
+            onChange={(e) => { setSearch(e.target.value); setPage(1); }}
+            className="w-full max-w-xs rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white placeholder-slate-500 focus:border-red-500 focus:outline-none"
+          />
+          <select
+            value={filterRisk}
+            onChange={(e) => { setFilterRisk(e.target.value); setPage(1); }}
+            className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-1.5 text-xs text-white focus:border-red-500 focus:outline-none"
+          >
+            <option value="ALL">All Risk Levels ({students.length})</option>
+            <option value="CRITICAL">Critical Only ({counts.critical})</option>
+            <option value="SUSPICIOUS">Suspicious Only ({counts.suspicious})</option>
+            <option value="NORMAL">Normal Only ({counts.normal})</option>
+          </select>
+        </div>
+        {totalPages > 1 && (
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <button
+              type="button"
+              disabled={currentPage <= 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              className="rounded border border-slate-700 px-2 py-1 disabled:opacity-40"
+            >
+              Prev
+            </button>
+            <span>
+              Page {currentPage} of {totalPages}
+            </span>
+            <button
+              type="button"
+              disabled={currentPage >= totalPages}
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              className="rounded border border-slate-700 px-2 py-1 disabled:opacity-40"
+            >
+              Next
+            </button>
+          </div>
+        )}
+      </div>
+
       {error && <p className="mb-3 text-sm text-red-400">{error}</p>}
 
       <div className={`grid grid-cols-1 gap-3 ${gridCols}`}>
-        {students.map((s) => {
+        {paginatedStudents.map((s) => {
           const attention = s.riskLevel === 'CRITICAL' || s.status === 'TERMINATED';
           const concern = s.riskLevel === 'SUSPICIOUS' || s.status === 'PAUSED' || s.status === 'DISCONNECTED';
           return (

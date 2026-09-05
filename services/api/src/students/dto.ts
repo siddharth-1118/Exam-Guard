@@ -1,4 +1,5 @@
-import { IsBoolean, IsEmail, IsOptional, IsString, Length, Matches } from 'class-validator';
+import { Type } from 'class-transformer';
+import { ArrayMaxSize, IsArray, IsBoolean, IsEmail, IsOptional, IsString, Length, Matches, ValidateNested } from 'class-validator';
 
 export class CreateStudentDto {
   @IsEmail()
@@ -27,4 +28,12 @@ export class UpdateStudentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean;
+}
+
+export class BulkImportStudentsDto {
+  @IsArray()
+  @ArrayMaxSize(500)
+  @ValidateNested({ each: true })
+  @Type(() => CreateStudentDto)
+  students!: CreateStudentDto[];
 }
