@@ -51,7 +51,7 @@ This document presents the authoritative technical status, empirical evidence, l
 | **41. AI Runtime Foundation** | **PARTIAL** | `ModelAdapter` interface with `NullModelAdapter`; `AiProctoringService` with frame sampling, backpressure, inference timeout, metrics; clean adapter boundary for real model plug-in | **No real CV model** — interface/contract only; requires real model + GPU |
 | **42. Production Observability** | **PARTIAL** | Health endpoints, audit logs, SFU metrics, media gateway metrics, recording metrics; structured logging with correlation IDs | No Prometheus/Grafana; no distributed tracing; no alerting system |
 | **43. Production Security Audit** | **PROVEN** | Auth, API, IDOR, media, recording, desktop, privacy, secrets all verified secure; no hardcoded prod secrets; audit redaction active | MFA config storage needs DB table; no centralized secrets manager |
-| **44. Deployment Documentation** | **PARTIAL** | PRODUCTION_READINESS.md comprehensive; architecture documented; env vars documented | No DEPLOYMENT.md, OPERATIONS.md, SECURITY.md, INCIDENT_RESPONSE.md |
+| **44. Deployment Documentation** | **PARTIAL** | `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md`, `docs/INCIDENT_RESPONSE.md`, `docs/MONITORING.md` created | Not validated against real deployment |
 | **45. Final Release Gate** | **PARTIAL** | 40 subsystems evaluated; blockers categorized; Technically Ready vs Deployment Ready vs Commercial Ready distinction made | See detailed matrix below |
 | **46. Containerization / Deployment** | **PARTIAL** | Multi-stage Dockerfiles for API + media; docker-compose.yml for local production topology; .dockerignore; health checks; non-root users | No validated Docker build; no production container registry |
 | **47. Database Migration Safety** | **PROVEN** | 6 versioned migrations; `prisma migrate deploy` for production; seed guarded by APP_ENV; no silent schema mutation | Migration validation in CI pipeline |
@@ -59,7 +59,14 @@ This document presents the authoritative technical status, empirical evidence, l
 | **49. CI Pipeline** | **PARTIAL** | GitHub Actions workflow with 8 parallel jobs: install, typecheck, API tests, media tests, desktop tests, security tests, build, migration validation | Not yet validated in GitHub; no integration test jobs |
 | **50. Prometheus Metrics** | **PARTIAL** | `/metrics` endpoint with Prometheus exposition format; bounded labels; HTTP request metrics, attempt/media/recording gauges, auth/MFA counters | No Grafana dashboards; no Prometheus server deployed |
 | **51. Alerting Contract** | **PARTIAL** | `docs/MONITORING.md` with CRITICAL/WARNING alert rules, escalation paths, dashboard recommendations | No actual alerting system connected |
-| **52. Production Runbook** | **PARTIAL** | `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md`, `docs/INCIDENT_RESPONSE.md`, `docs/MONITORING.md` | Not validated against real production deployment |
+| **53. Docker Build Validation** | **BLOCKED** | Dockerfiles exist; Docker daemon not running | Cannot validate build/runtime without Docker |
+| **54. Backup / Restore Test** | **BLOCKED** | pg_dump not installed on machine | Cannot test backup/restore locally |
+| **55. CI Pipeline Validation** | **PARTIAL** | YAML valid; all equivalent local tests pass (236/236) | Not validated in actual GitHub Actions |
+| **56. Monitoring Stack** | **PARTIAL** | `/metrics` endpoint ready; `docs/MONITORING.md` defines alerts | No Prometheus/Grafana deployed |
+| **57. Backup Scheduling** | **PARTIAL** | `scripts/db-backup.sh` ready; scheduling depends on deployment platform | No automated schedule configured |
+| **58. Desktop Release Engineering** | **PARTIAL** | electron-builder configured; NSIS/DMG/AppImage targets | No code signing; electron-builder not in devDeps |
+| **59. Release Candidate** | **PARTIAL** | 236/236 tests pass; security scan clean | No full E2E with real hardware media |
+| **52. Production Runbook** | **PARTIAL** | 5 operational docs created | Not validated against real production deployment |
 
 ---
 
@@ -872,17 +879,17 @@ This prevents two concurrent submit requests from both succeeding — only one w
 | 25 | Concurrency | PROVEN | Atomic updates, unique constraints |
 | 26 | Redis | PROVEN | Ephemeral only, TTL-bound, fail-safe |
 | 27 | PostgreSQL | PROVEN | Schema with indexes, migrations |
-| 28 | Backup/DR | BLOCKED | No backup strategy configured |
-| 29 | CI/CD | BLOCKED | No pipeline configured |
+| 28 | Backup/DR | PARTIAL | Backup script exists, not automated |
+| 29 | CI/CD | PARTIAL | GitHub Actions workflow, local tests pass |
 | 30 | Desktop packaging | PARTIAL | electron-builder configured, no signing |
 | 31 | Code signing | BLOCKED | No certificate |
 | 32 | Auto-update | BLOCKED | Not implemented |
 | 33 | Privacy | PROVEN | GDPR export/delete, consent, RBAC |
 | 34 | GDPR export | PROVEN | Structured JSON, audited |
 | 35 | GDPR deletion | PROVEN | Anonymize + preserve audit |
-| 36 | Observability | PARTIAL | Health/ready endpoints, no Prometheus |
-| 37 | Incident response | UNVERIFIED | No procedures documented |
-| 38 | Disaster recovery | BLOCKED | No backup/restore tested |
+| 36 | Observability | PARTIAL | /metrics endpoint, Prometheus format, docs |
+| 37 | Incident response | PARTIAL | docs/INCIDENT_RESPONSE.md created |
+| 38 | Disaster recovery | PARTIAL | Backup script exists, DR not tested |
 | 39 | Security testing | PARTIAL | Code review, no pen testing |
 | 40 | Load testing | PARTIAL | Synthetic API tests, no media tests |
 
@@ -908,6 +915,215 @@ This prevents two concurrent submit requests from both succeeding — only one w
 | **TECHNICALLY READY** | ✅ YES | Core product works: auth, exams, recording, monitoring, MFA all functional |
 | **DEPLOYMENT READY** | ⚠️ PARTIAL | Needs: CI/CD, backup strategy, code signing, S3 credentials, monitoring |
 | **COMMERCIAL PRODUCTION READY** | ❌ NO | Needs: all deployment blockers + legal compliance + AI model + load testing |
+
+---
+
+## Group 8 — Production Infrastructure Foundation (C46–C52)
+
+### C46: Containerization / Deployment
+
+**Status: PARTIAL**
+
+- Multi-stage Dockerfiles for API (`services/api/Dockerfile`) and Media (`services/media/Dockerfile`)
+- `docker-compose.yml` with PostgreSQL 16, Redis 7, API, Media services
+- `.dockerignore` excludes node_modules, .git, backups
+- Non-root runtime user in both Dockerfiles
+- Health checks via `curl http://localhost:PORT/health`
+- Graceful shutdown via SIGTERM → NestJS lifecycle hooks
+- FFmpeg installed in media image for recording
+- mediasoup native dependencies installed
+
+**Limitation**: Docker build not validated locally (Docker daemon stopped). C53 validates.
+
+### C47: Database Migration / Startup Safety
+
+**Status: PROVEN**
+
+- 6 versioned Prisma migrations in `packages/database/prisma/migrations/`
+- Production startup uses `prisma migrate deploy` (explicit, not automatic)
+- Seed script guarded by `APP_ENV=test` — cannot run in production
+- No silent schema mutation at startup
+- Migration failure prevents API startup (NestJS Bootstrap)
+- CI pipeline includes dedicated migration-validation job
+
+### C48: Backup / Restore Foundation
+
+**Status: PARTIAL**
+
+- `scripts/db-backup.sh`: timestamped gzip + SHA-256 checksum
+- No production backup schedule configured
+- No automated restore testing
+- RPO/RTO undefined (no production infrastructure measured)
+
+**Limitation**: pg_dump not available on current machine (BLOCKED for local testing).
+
+### C49: CI Pipeline
+
+**Status: PARTIAL**
+
+- `.github/workflows/ci.yml` with 8 parallel jobs:
+  1. Install (pnpm frozen-lockfile)
+  2. Typecheck (API + Media + Security)
+  3. API tests (with PostgreSQL + Redis service containers)
+  4. Media tests
+  5. Desktop tests
+  6. Security tests
+  7. Build (all packages)
+  8. Migration validation (fresh DB + force-reset + re-migrate)
+- Node 20, pnpm 9 pinned
+- pnpm store caching
+- No secrets required for normal PR CI
+- Optional integration jobs for S3, GPU, signing (not in default pipeline)
+
+**Limitation**: Not yet validated in actual GitHub Actions execution.
+
+### C50: Prometheus-Compatible Metrics
+
+**Status: PARTIAL**
+
+- `GET /metrics` endpoint (public, no auth required for scraping)
+- Prometheus exposition format (text/plain; version=0.0.4)
+- Available metrics:
+  - `examguard_http_requests_total` (counter: method, route, status)
+  - `examguard_http_request_duration_seconds` (histogram: method, route)
+  - `examguard_attempts_active` (gauge)
+  - `examguard_media_participants` (gauge)
+  - `examguard_recordings_active` (gauge)
+  - `examguard_redis_health` (gauge: 0/1)
+  - `examguard_auth_failures_total` (counter)
+  - `examguard_mfa_failures_total` (counter)
+- Routes normalized (UUID → `:id`, digits → `:id`) to prevent high-cardinality labels
+- No studentId, email, IP, recordingId, attemptId used as labels
+
+**Limitation**: No Prometheus server deployed; no Grafana dashboards configured.
+
+### C51: Alerting Contract
+
+**Status: PARTIAL**
+
+- `docs/MONITORING.md` defines:
+  - CRITICAL alerts (API down, DB down, Redis down, SFU down, recording failure spike, storage failure)
+  - WARNING alerts (elevated latency, 5xx rate, reconnects, recording delay, CPU/memory, disk)
+  - Escalation paths (15min critical, 1hr warning, next-day info)
+  - Dashboard recommendations (API, Media, Recording, Security, Infrastructure panels)
+  - Log retention policy (30 days app, 1 year audit, 90 days metrics)
+
+**Limitation**: No actual alerting system connected (Prometheus/Alertmanager/Grafana not deployed).
+
+### C52: Production Runbook / Deployment Documentation
+
+**Status: PARTIAL**
+
+Created operational documentation:
+- `docs/DEPLOYMENT.md` — architecture, env vars, secrets, startup order, health checks
+- `docs/OPERATIONS.md` — daily ops, restart procedures, scaling, storage management
+- `docs/SECURITY.md` — auth, MFA, RBAC, tenancy, media, recording, Electron
+- `docs/INCIDENT_RESPONSE.md` — service outage, data breach, credential compromise
+- `docs/MONITORING.md` — metrics, alerts, dashboards, escalation
+
+**Limitation**: Not validated against real production deployment.
+
+---
+
+## Group 9 — Infrastructure Validation & Release Engineering (C53–C59)
+
+### C53: Docker Build Validation
+
+**Status: BLOCKED**
+
+- Docker Desktop service is stopped on this machine
+- Cannot start without administrator privileges
+- Dockerfiles exist and are structurally sound (multi-stage, non-root, health checks)
+- Cannot validate: build success, runtime behavior, image size, port exposure
+
+**Blocker**: Docker daemon not running. Requires Docker Desktop to be started by admin.
+
+### C54: Database Backup / Restore Test
+
+**Status: BLOCKED**
+
+- `pg_dump` / `pg_restore` not installed on current machine
+- PostgreSQL is available on port 5433 (Prisma-connected)
+- Backup script (`scripts/db-backup.sh`) exists but cannot be executed
+- Cannot validate: backup creation, SHA-256 integrity, restore correctness, row counts
+
+**Blocker**: PostgreSQL client tools not installed. Requires `pg_dump` in PATH.
+
+### C55: CI Pipeline Validation
+
+**Status: PARTIAL**
+
+- `.github/workflows/ci.yml` YAML structure is valid (199 lines, correct keys)
+- All 8 jobs defined with correct dependencies and service containers
+- Local equivalent validated:
+  - API tests: **110/110 pass** (REAL/LOCAL)
+  - Media tests: **43/43 pass** + 6 skipped (REAL/LOCAL)
+  - Desktop tests: **58/58 pass** (REAL/LOCAL)
+  - Security tests: **25/25 pass** (REAL/LOCAL)
+  - API typecheck: **clean** (REAL/LOCAL)
+- Cannot validate: GitHub Actions execution, service container startup, caching behavior
+
+### C56: Monitoring Stack Configuration
+
+**Status: PARTIAL**
+
+- `docs/MONITORING.md` defines alert rules, dashboards, escalation
+- `/metrics` endpoint ready for Prometheus scraping
+- No Prometheus/Grafana docker-compose or configuration files created
+- No actual monitoring stack deployed
+
+**Limitation**: Configuration exists but deployment requires separate infrastructure setup.
+
+### C57: Backup Scheduling Design
+
+**Status: PARTIAL**
+
+- `scripts/db-backup.sh` available for manual or cron execution
+- Production scheduling depends on deployment platform (cron, K8s CronJob, or managed)
+- Retention policy not formally defined (recommend: 7 daily, 4 weekly, 12 monthly)
+- No automated restore testing procedure
+
+**Limitation**: Scheduling depends on production infrastructure choice.
+
+### C58: Desktop Release Engineering
+
+**Status: PARTIAL**
+
+- `electron-builder` configuration in `package.json`:
+  - Windows: NSIS installer (non-one-click, custom directory)
+  - macOS: DMG
+  - Linux: AppImage + deb
+- electron-builder not in devDependencies (needs to be added)
+- No code signing configured
+- No auto-update mechanism
+- Application ID: `org.examguard.student-desktop`
+- Output: `dist/installer/`
+
+**Blocker**: No code signing certificate. Desktop shows security warnings on Windows/macOS without signing.
+
+### C59: Release Candidate Build + E2E Regression
+
+**Status: PARTIAL**
+
+**Regression results (LOCAL, REAL tests)**:
+
+| Suite | Result | Type |
+|---|---|---|
+| API unit tests | **110/110** | REAL / LOCAL |
+| Media unit tests | **43/43** + 6 skipped | REAL / LOCAL |
+| Desktop unit tests | **58/58** | REAL / LOCAL |
+| Security unit tests | **25/25** | REAL / LOCAL |
+| API typecheck | **clean** | REAL / LOCAL |
+| **Total** | **236/236** | **REAL / LOCAL** |
+
+**E2E coverage**: Unit-level only. No full E2E with real hardware media, real exam sessions, or real monitor dashboard.
+
+**Security scan**:
+- No mock MFA remaining (real TOTP implemented)
+- No hardcoded production secrets
+- No debug flags in production code paths
+- No bypass endpoints
+- No TODO security bypasses found
 
 ---
 
