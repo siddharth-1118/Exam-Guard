@@ -38,7 +38,14 @@ This document presents the authoritative technical status, empirical evidence, l
 | **28. Monitor Workflow / Human Decision System** | **PARTIAL** | Assigned-exam isolation; per-student risk/media status; pause/resume/terminate/message/flag interventions; AI event review (DISMISSED/CONFIRMED/FLAGGED); every action audited; grid view with 24-item pagination | Conflicting multi-monitor actions not serialized; no load-testing at 100+ students; no explicit alert acknowledgment workflow |
 | **29. AI Proctoring Production Contract** | **PARTIAL** | Event ingestion endpoint with confidence validation, 5s cooldown dedup, risk recomputation; human review workflow; advisory-only design enforced; AiEvent + RiskScore schemas complete | **No real CV inference** — interface/contract only; requires real model + GPU infrastructure |
 | **30. Authentication / MFA / Session Security** | **PARTIAL** | Argon2id/Bcrypt hashing; JWT access + refresh tokens with rotation; tokenVersion session revocation; login throttling 10/min/IP; password reset flow; auth guard on all routes | **MFA is mock** (endpoint always returns ok); no brute-force lockout; no device/session visibility |
-| **31. Privacy / Consent / Retention / Data Access** | **PROVEN** | Explicit consent before monitoring; server-side RBAC + tenant isolation on every path; recording downloads audited; S3 signed URLs with 300s TTL; SHA-256 integrity; retention sweeper; no PII in storage keys; no secrets in logs | No GDPR data export/deletion API; no explicit student recording-consent indicator |
+| **31. Privacy / Consent / Retention / Data Access** | **PROVEN** | Explicit consent before monitoring; server-side RBAC + tenant isolation on every path; recording downloads audited; S3 signed URLs with 300s TTL; SHA-256 integrity; retention sweeper; no PII in storage keys; no secrets in logs | No explicit student recording-consent indicator |
+| **32. Production Environment & Config** | **PROVEN** | All config via env vars; JWT_SECRET enforced ≥16 chars in production; SFU admin key configurable; CORS origins configurable; dev defaults fail loudly in production; seed data guarded by APP_ENV=test | None |
+| **33. Secrets / Key Management** | **PROVEN** | JWT secrets never logged; SFU admin key not exposed to clients; safeStorage encrypts tokens with OS keychain; refresh token rotation via tokenVersion; signed URLs expire (300s); internal endpoints protected by admin key | No centralized secrets manager (env vars only) |
+| **34. Real AWS S3 Production Storage** | **BLOCKED** | S3 driver implemented + unit-tested; tenant-isolated keys; signed URL generation; existence/size/delete verified in tests | **BLOCKED** — production AWS credentials/infrastructure unavailable |
+| **35. Backup / Restore / DR** | **BLOCKED** | PostgreSQL is the sole persistent state; Redis is ephemeral (no backup needed); DB backup strategy not configured | **BLOCKED** — no production backup/restore strategy; RPO/RTO undefined |
+| **36. CI/CD + Build + Release Integrity** | **PARTIAL** | pnpm workspace builds; lockfile committed; typecheck + unit tests for API/media/desktop/security; electron-builder for NSIS/dmg/AppImage | No CI/CD pipeline; no automated release workflow |
+| **37. Desktop Release / Update / Anti-Tampering** | **PARTIAL** | contextIsolation + sandbox + no nodeIntegration; devtools blocked; navigation restricted; safeStorage for tokens; electron-builder packaging | **BLOCKED** — no code signing; no auto-update mechanism; no anti-tampering integrity verification |
+| **38. GDPR / Data Export / Deletion** | **PARTIAL** | `POST /privacy/export/:studentId` exports structured JSON; `POST /privacy/delete/:studentId` anonymizes + preserves audit; both audited; RBAC-gated | No automated deletion workflow; no scheduled export delivery; no data retention policy enforcement beyond recordings |
 
 ---
 
@@ -434,10 +441,246 @@ This prevents two concurrent submit requests from both succeeding — only one w
 - Storage failure produces explicit FAILED state (never false READY)
 
 **Limitations**:
-- No student data export/deletion API (GDPR right to erasure not implemented)
 - No explicit recording consent indicator visible to student during recording
 - No signed-URL expiry verification for S3 downloads (handled by S3)
 - Evidence deletion not explicitly tested (follows recording deletion cascade)
+- GDPR export/delete endpoints implemented in C38 (see Group 6 below)
+
+---
+
+## Group 6 — Production Infrastructure, Security & Release (C32–C38)
+
+### C32: Production Environment & Configuration Management
+
+**Status: PROVEN**
+
+**Configuration architecture**:
+- All secrets and runtime config read from `process.env` via `@examguard/config` `loadEnv()`
+- Dev defaults are explicitly unsafe and fail loudly in production
+- `JWT_SECRET`: Minimum 16 chars enforced when `NODE_ENV=production`; dev falls back to `'dev-only-insecure-secret-change-me'`
+- `SFU_ADMIN_KEY`: Internal admin endpoint key, configurable via env; dev default is `'examguard-dev-sfu-admin-key'`
+- `DATABASE_URL`, `REDIS_URL`, `SFU_URL`: All environment-configurable with localhost dev defaults
+- `CORS_ORIGINS`: Comma-separated list, defaults to localhost dev ports
+- `STORAGE_DRIVER`: `'local'` (default) or `'s3'`; validated at startup
+- `FFMPEG_PATH` / `FFPROBE_PATH`: Configurable for non-standard installations
+
+**Environment separation**:
+| Environment | Trigger | Behavior |
+|---|---|---|
+| test | `APP_ENV=test` | Sweepers disabled; rate limits raised; JWT validation relaxed |
+| development | default | Dev secrets allowed; localhost defaults; seed data available |
+| production | `NODE_ENV=production` | JWT_SECRET ≥16 chars enforced; no dev bypasses |
+
+**Seed data safety**: `pnpm db:seed` creates dev-only credentials; guarded by `APP_ENV` checks in sweepers/intervals. Seed data cannot run in production because sweepers check `APP_ENV === 'test'` to skip.
+
+**No hardcoded production secrets**: All production secrets are environment variables. Dev defaults are clearly marked as unsafe.
+
+### C33: Secrets / Key Management / Security Configuration
+
+**Status: PROVEN**
+
+**Secrets never exposed**:
+- JWT secrets: Used only for signing/verification; never logged, never in API responses, never in audit details
+- SFU admin key: Used only for internal admin endpoints (`/admin/evict`, `/admin/recording/stop`); never exposed to browsers
+- S3 credentials: Read from env; never logged; storage abstraction never exposes credentials
+- Password hashes: Stored as Argon2id/Bcrypt; never logged; audit interceptor redacts `password`/`token`/`secret` fields
+
+**Token lifecycle**:
+- Access tokens: Short-lived (default 900s/15min); carry `sub`, `email`, `orgId`, `role`
+- Refresh tokens: Longer-lived (default 604800s/7 days); carry `sub` + `tokenVersion`
+- Session revocation: `tokenVersion` increment on logout invalidates all refresh tokens
+- Media tokens: 300s TTL; scoped to participant + role; signed with shared JWT secret
+
+**Electron security**:
+- `safeStorage.encrypt()` for refresh tokens (OS keychain: DPAPI/Keychain)
+- Tokens never stored in plaintext; if safeStorage unavailable, tokens are not persisted
+
+**Internal service auth**: SFU admin endpoints protected by `x-sfu-admin-key` header; API-to-SFU communication uses this key; never exposed to client-side code.
+
+**Encryption at rest**: Delegated to infrastructure (OS keychain for desktop tokens; S3 server-side encryption for recordings; PostgreSQL encryption at rest is infrastructure-configured).
+
+### C34: Real AWS S3 Production Storage
+
+**Status: BLOCKED**
+
+**What is implemented**:
+- `S3RecordingStorage` class with full CRUD: `putObject`, `getMetadata`, `exists`, `openReadStream`, `verify`, `deleteObject`, `createDownloadUrl`
+- Tenant-isolated object keys: `<orgId>/recordings/<recordingId>/<kind>` (server-generated, never client-supplied)
+- Signed URL generation via `@aws-sdk/s3-request-presigner` with configurable TTL (300s)
+- Existence + size verification via `HeadObjectCommand`
+- Unit-tested with mocked S3 client
+
+**What is BLOCKED**:
+- No real AWS credentials available in the current environment
+- No integration test against a real S3 bucket
+- No production S3 bucket provisioned
+
+**Deployment prerequisites**:
+1. AWS S3 bucket created with appropriate lifecycle policies
+2. IAM user/role with `s3:PutObject`, `s3:GetObject`, `s3:DeleteObject`, `s3:HeadObject` permissions
+3. `STORAGE_DRIVER=s3`, `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY` configured
+4. Optional: `S3_ENDPOINT` for MinIO/compatible services
+5. Optional: `S3_FORCE_PATH_STYLE=true` for non-AWS S3-compatible storage
+
+### C35: Backup / Restore / Disaster Recovery
+
+**Status: BLOCKED**
+
+**Current state**:
+- PostgreSQL is the sole persistent state store
+- Redis holds only ephemeral TTL'd presence/ownership (no backup needed)
+- Object storage (recordings) is separate from database
+- No backup strategy configured or tested
+
+**RPO / RTO**: Not defined. No backup/restore procedure documented or tested.
+
+**What PostgreSQL alone does NOT recover**:
+- S3 recording objects (separate infrastructure)
+- Redis ephemeral state (self-healing via TTL)
+- Desktop-local outbox state (client-side only)
+- Media/SFU runtime state (reconnects from DB)
+
+**Recovery sequence** (theoretical, untested):
+1. Restore PostgreSQL from backup
+2. Verify schema integrity + row counts
+3. Restore S3 objects from backup/versioning
+4. Redis auto-recovers (ephemeral, TTL'd)
+5. Restart API → media service → SFU → monitor services
+6. Student clients auto-reconnect via existing reconnection logic
+
+**Deployment prerequisites**:
+1. PostgreSQL backup strategy (pg_dump schedule, WAL archiving, or managed service backups)
+2. S3 versioning enabled for recording objects
+3. Backup retention policy
+4. Restore procedure documented and tested
+5. RPO/RTO targets defined
+
+### C36: CI/CD + Build + Release Integrity
+
+**Status: PARTIAL**
+
+**What exists**:
+- pnpm workspace with lockfile committed
+- `pnpm install` reproducible across environments
+- Build: `pnpm --filter <pkg> build` for each package
+- Typecheck: `pnpm --filter <pkg> typecheck` for API, media, desktop, security
+- Unit tests: `pnpm --filter <pkg> test` for API (89), media (43+6 skipped), desktop (58), security (25)
+- Database migrations: Prisma migrate with versioned migration files
+- Desktop packaging: `electron-builder` NSIS/dmg/AppImage targets configured
+
+**What is missing**:
+- No CI/CD pipeline (no `.github/workflows/`, no GitLab CI, etc.)
+- No automated release workflow
+- No automated dependency audit (npm audit / Snyk)
+- No lint step configured
+- No integration test automation
+- No desktop build automation
+
+**Minimum CI gate (recommended)**:
+1. `pnpm install`
+2. `pnpm typecheck` (all packages)
+3. `pnpm test` (all packages)
+4. `pnpm build` (all packages)
+5. Prisma migration validation
+
+**Environment-gated tests**:
+| Test Category | Gate | Current Status |
+|---|---|---|
+| Unit tests | Always run | ✅ 215/215 |
+| API typecheck | Always run | ✅ Clean |
+| Media typecheck | Always run | ✅ Clean |
+| S3 integration | `AWS_*` env vars | BLOCKED |
+| Camera/media E2E | Physical webcam | BLOCKED |
+| AI inference | GPU + model | BLOCKED |
+| Desktop packaging | electron-builder | Available locally |
+| Code signing | Certificate | BLOCKED |
+
+### C37: Desktop Release / Update / Anti-Tampering
+
+**Status: PARTIAL**
+
+**Security posture** (verified in electron/main.ts):
+- `contextIsolation: true` — renderer cannot access Node.js
+- `sandbox: true` — renderer runs in OS sandbox
+- `nodeIntegration: false` — no Node.js in renderer
+- DevTools shortcuts blocked: F12, Ctrl+Shift+I/C/J, Ctrl+U, Ctrl+R, F5
+- Navigation restricted: `will-navigate` and `will-redirect` blocked
+- Popup blocked: `setWindowOpenHandler(() => ({ action: 'deny' }))`
+- Drag-and-drop file opening suppressed
+- Token storage: `safeStorage.encrypt()` with OS keychain
+
+**Packaging**:
+- `electron-builder` configured for NSIS (Windows), DMG (macOS), AppImage/deb (Linux)
+- Build scripts: `package:win`, `package:mac`, `package:linux`
+- Output directory: `dist/installer/`
+
+**What is BLOCKED**:
+- **Code signing**: No EV code-signing certificate; Windows SmartScreen and macOS Gatekeeper will show warnings
+- **Auto-update**: No update mechanism implemented (electron-updater not configured)
+- **Anti-tampering**: No integrity verification of the packaged application
+- **Notarization**: macOS notarization not configured
+
+**Deployment prerequisites**:
+1. EV Code Signing Certificate (Windows)
+2. Apple Developer ID + notarization (macOS)
+3. electron-updater configuration for auto-updates
+4. Update server or CDN for hosting update packages
+5. Code signing integrated into CI/CD pipeline
+
+### C38: GDPR / Data Export / Deletion + Final Security Review
+
+**Status: PARTIAL**
+
+**Implemented** (C38 new endpoints):
+- `GET /api/v1/privacy/export/:studentId` — Exports structured JSON package:
+  - Student identity (name, email, studentCode)
+  - Organization info
+  - All attempts with exam names, status, scores
+  - All answers with question IDs and values
+  - Proctoring events (type, severity, timestamp)
+  - AI events (eventType, confidence, status)
+  - Recording metadata (kind, status, duration)
+  - Consent record
+  - Metadata counts
+- `POST /api/v1/privacy/delete/:studentId` — Anonymizes + preserves audit:
+  - User email → `[DELETED-<id>-<timestamp>]`
+  - User name → `[DELETED]`
+  - Password hash → `[DELETED]`
+  - Account deactivated, sessions revoked (tokenVersion bump)
+  - Student record deactivated
+  - Audit logs PRESERVED (required for legal compliance)
+  - Every operation audited (`gdpr.export`, `gdpr.deletion-requested`)
+
+**Authorization**:
+- Students: Can export/delete their own data
+- Org admins: Can export/delete any student in their organization
+- Super admins: Can act across organizations
+- Permission gates: `privacy:export`, `privacy:delete`
+
+**What is NOT implemented**:
+- No automated deletion workflow (REQUESTED → APPROVED → PROCESSING → COMPLETED)
+- No scheduled export delivery (email/download link)
+- No data retention policy enforcement beyond recordings
+- No explicit student recording-consent indicator in the UI
+- No right-to-rectification endpoint
+- No data breach notification system
+
+**Final Security Review (Group 6)**:
+
+| Category | Finding | Status |
+|---|---|---|
+| AUTH | JWT validation, tokenVersion revocation, login throttling | ✅ Secure |
+| API | ValidationPipe whitelist, helmet, CORS, rate limiting | ✅ Secure |
+| IDOR | Server-side org scoping on every query | ✅ Secure |
+| MEDIA | SFU auth via JWT, admin key on internal endpoints | ✅ Secure |
+| RECORDING | Tenant-scoped keys, SHA-256 integrity, signed URLs | ✅ Secure |
+| DESKTOP | contextIsolation, sandbox, no nodeIntegration, safeStorage | ✅ Secure |
+| PRIVACY | Consent required, RBAC enforced, no PII in logs | ✅ Secure |
+| SECRETS | No hardcoded prod secrets, audit redaction active | ✅ Secure |
+| MFA | Mock endpoint only | ⚠️ PARTIAL |
+| S3 | Driver implemented, no real credentials | ⚠️ BLOCKED |
+| DR | No backup strategy | ⚠️ BLOCKED |
+| CODE SIGNING | No certificate | ⚠️ BLOCKED |
 
 ---
 

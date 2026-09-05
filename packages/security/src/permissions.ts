@@ -26,6 +26,7 @@ export type Permission =
   | 'attempt:start'
   | 'attempt:submit'
   | 'attempt:read'
+  | 'attempt:grade'
   | 'proctor:monitor'
   | 'proctor:intervene'
   | 'media:publish'
@@ -34,7 +35,9 @@ export type Permission =
   | 'recording:read'
   | 'audit:read'
   | 'report:read'
-  | 'settings:manage';
+  | 'settings:manage'
+  | 'privacy:export'
+  | 'privacy:delete';
 
 export const ALL_PERMISSIONS: Permission[] = [
   'system:manage',
@@ -56,6 +59,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   'attempt:start',
   'attempt:submit',
   'attempt:read',
+  'attempt:grade',
   'proctor:monitor',
   'proctor:intervene',
   'media:publish',
@@ -65,6 +69,8 @@ export const ALL_PERMISSIONS: Permission[] = [
   'audit:read',
   'report:read',
   'settings:manage',
+  'privacy:export',
+  'privacy:delete',
 ];
 
 export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
@@ -86,6 +92,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     'question:manage',
     'question:read',
     'attempt:read',
+    'attempt:grade',
     'proctor:monitor',
     'proctor:intervene',
     'media:subscribe',
@@ -94,6 +101,8 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     'audit:read',
     'report:read',
     'settings:manage',
+    'privacy:export',
+    'privacy:delete',
   ],
   EXAM_MANAGER: [
     'exam:create',
@@ -104,6 +113,7 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     'question:read',
     'student:read',
     'attempt:read',
+    'attempt:grade',
     'report:read',
     'recording:read',
   ],
@@ -123,6 +133,8 @@ export const ROLE_PERMISSIONS: Record<RoleName, Permission[]> = {
     'attempt:read',
     'media:publish',
     'recording:read',
+    'privacy:export',
+    'privacy:delete',
   ],
 };
 

@@ -23,6 +23,7 @@ import { AuditModule } from './audit/audit.module';
 import { ReportsModule } from './reports/reports.module';
 import { HealthModule } from './health/health.module';
 import { RecordingsModule } from './recordings/recordings.module';
+import { PrivacyModule } from './privacy/privacy.module';
 
 @Module({
   imports: [
@@ -44,6 +45,7 @@ import { RecordingsModule } from './recordings/recordings.module';
     AuditModule,
     ReportsModule,
     RecordingsModule,
+    PrivacyModule,
     HealthModule,
   ],
   providers: [
