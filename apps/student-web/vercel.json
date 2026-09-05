@@ -1,6 +1,5 @@
 {
-  "version": 2,
-  "buildCommand": "pnpm --filter @examguard/student-web build",
-  "installCommand": "pnpm install",
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "buildCommand": "cd ../.. && pnpm --filter @examguard/student-web build",
+  "installCommand": "cd ../.. && pnpm install"
 }
