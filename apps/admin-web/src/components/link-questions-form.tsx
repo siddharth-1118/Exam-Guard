@@ -51,7 +51,7 @@ export function LinkQuestionsForm({ examId }: { examId: string }) {
   return (
     <div>
       <div className="mb-3 grid max-h-72 grid-cols-1 gap-2 overflow-y-auto md:grid-cols-2">
-        {questions.map((q) => {
+        {questions.map((q: Question) => {
           const checked = selected.includes(q.id);
           return (
             <button

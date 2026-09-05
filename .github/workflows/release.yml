@@ -10,7 +10,7 @@ on:
       - 'v*'
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   build-and-release:
@@ -42,12 +42,15 @@ jobs:
       - name: Install Dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Build Packages
+      - name: Generate Prisma Client & Build Packages
         run: |
+          cd packages/database && npx prisma generate
+          cd ../..
           pnpm --filter @examguard/types build
           pnpm --filter @examguard/config build
           pnpm --filter @examguard/auth build
           pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
 
       - name: Build Electron App (${{ matrix.target }})
         run: pnpm --filter @examguard/student-desktop build:${{ matrix.target }}

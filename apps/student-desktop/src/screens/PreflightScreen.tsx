@@ -150,7 +150,7 @@ export function PreflightScreen({
 
     const info = await bridge()
       .getAppInfo()
-      .then((i) => i.displayCount)
+      .then((i: { displayCount: number }) => i.displayCount)
       .catch(() => 1);
     if (info > 1) {
       setRows((prev) => [

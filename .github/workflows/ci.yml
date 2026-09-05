@@ -11,7 +11,7 @@ on:
     branches: [main, master]
 
 env:
-  NODE_VERSION: '20'
+  NODE_VERSION: '22'
 
 jobs:
   install:
@@ -25,6 +25,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
 
   typecheck:
     name: Typecheck
@@ -38,6 +45,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
       - run: pnpm --recursive typecheck
 
   api-tests:
@@ -81,6 +95,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
       - run: cd packages/database && npx prisma migrate deploy
       - run: pnpm --filter @examguard/api test
 
@@ -96,6 +117,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
       - run: pnpm --filter @examguard/media test
 
   desktop-tests:
@@ -110,6 +138,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
       - run: pnpm --filter @examguard/student-desktop test
 
   security-tests:
@@ -124,6 +159,13 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
+      - run: |
+          pnpm --filter @examguard/types build
+          pnpm --filter @examguard/config build
+          pnpm --filter @examguard/auth build
+          pnpm --filter @examguard/security build
+          pnpm --filter @examguard/database build
       - run: pnpm --filter @examguard/security test
 
   build:
@@ -138,6 +180,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
       - run: pnpm --filter @examguard/types build
       - run: pnpm --filter @examguard/config build
       - run: pnpm --filter @examguard/auth build
@@ -174,6 +217,7 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
+      - run: cd packages/database && npx prisma generate
       - run: cd packages/database && npx prisma migrate deploy
       - run: cd packages/database && npx prisma db push --force-reset
       - run: cd packages/database && npx prisma migrate deploy

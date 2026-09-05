@@ -59,7 +59,7 @@ export default function QuestionBankPage() {
             <div className="flex justify-center py-10"><Spinner /></div>
           ) : (
             <div className="divide-y divide-slate-100">
-              {questions.map((q) => (
+              {questions.map((q: Question) => (
                 <div key={q.id} className="flex items-start justify-between gap-4 px-5 py-4">
                   <div>
                     <div className="mb-1 flex items-center gap-2">
