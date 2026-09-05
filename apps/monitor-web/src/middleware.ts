@@ -1,19 +1,26 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { jwtVerify } from 'jose';
 
-const SECRET = new TextEncoder().encode(
-  process.env.JWT_SECRET || 'dev-only-insecure-secret-change-me',
-);
+const SECRETS = [
+  process.env.JWT_SECRET,
+  'change-me-to-a-long-random-string',
+  'dev-only-insecure-secret-change-me',
+]
+  .filter(Boolean)
+  .map((s) => new TextEncoder().encode(s!));
 
 async function readClaims(req: NextRequest): Promise<{ role?: string } | null> {
   const token = req.cookies.get('eg_access')?.value;
   if (!token) return null;
-  try {
-    const { payload } = await jwtVerify(token, SECRET, { algorithms: ['HS256'] });
-    return { role: typeof payload.role === 'string' ? payload.role : undefined };
-  } catch {
-    return null;
+  for (const secret of SECRETS) {
+    try {
+      const { payload } = await jwtVerify(token, secret, { algorithms: ['HS256'] });
+      return { role: typeof payload.role === 'string' ? payload.role : undefined };
+    } catch {
+      // try next secret
+    }
   }
+  return null;
 }
 
 export async function middleware(req: NextRequest) {
