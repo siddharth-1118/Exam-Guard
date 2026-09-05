@@ -262,6 +262,76 @@ async function main() {
     create: { examId: exam.id, monitorId: monitorProfile.id },
   });
 
+  // Seed realistic exam attempts & scores for dashboard metrics
+  const now = new Date();
+  const oneHourAgo = new Date(now.getTime() - 3600 * 1000);
+  const tenMinsAgo = new Date(now.getTime() - 600 * 1000);
+
+  // Submitted attempts with scores
+  const sampleScores = [
+    { studentId: students[0], score: 92.5, status: 'SUBMITTED' as const },
+    { studentId: students[1], score: 78.0, status: 'SUBMITTED' as const },
+    { studentId: students[2], score: 85.0, status: 'SUBMITTED' as const },
+  ];
+
+  for (const item of sampleScores) {
+    await prisma.examAttempt.upsert({
+      where: {
+        examId_studentId_status: {
+          examId: exam.id,
+          studentId: item.studentId,
+          status: item.status,
+        },
+      },
+      update: { score: item.score, scoreGraded: true },
+      create: {
+        id: `seed-attempt-${item.studentId}`,
+        examId: exam.id,
+        studentId: item.studentId,
+        organizationId: org.id,
+        status: item.status,
+        score: item.score,
+        scoreGraded: true,
+        startedAt: oneHourAgo,
+        submittedAt: tenMinsAgo,
+      },
+    });
+  }
+
+  // Active live exam session
+  const activeAttempt = await prisma.examAttempt.upsert({
+    where: {
+      examId_studentId_status: {
+        examId: exam.id,
+        studentId: students[3],
+        status: 'ACTIVE',
+      },
+    },
+    update: {},
+    create: {
+      id: `seed-attempt-active`,
+      examId: exam.id,
+      studentId: students[3],
+      organizationId: org.id,
+      status: 'ACTIVE',
+      startedAt: tenMinsAgo,
+    },
+  });
+
+  // AI Proctoring Event for active attempt
+  await prisma.aiEvent.upsert({
+    where: { id: 'seed-ai-event-1' },
+    update: {},
+    create: {
+      id: 'seed-ai-event-1',
+      attemptId: activeAttempt.id,
+      eventType: 'LOOKING_AWAY',
+      confidence: 0.88,
+      status: 'PENDING',
+      capturedAt: new Date(now.getTime() - 120 * 1000),
+    },
+  });
+
   console.log('Seed complete.');
   console.log('Dev credentials (DEV ONLY):');
   console.log(`  Super admin:  superadmin@examguard.dev / ${DEV_PASSWORD}`);
