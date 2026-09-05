@@ -39,7 +39,7 @@ if (e2eUserData) {
   }
 }
 
-const API_URL = process.env.EXAMGUARD_API_URL ?? 'http://localhost:4000';
+const API_URL = process.env.EXAMGUARD_API_URL ?? 'https://nancey-pandemoniacal-candra.ngrok-free.dev';
 const IS_DEV = process.env.EXAMGUARD_DEV === '1';
 const SMOKE_TEST = process.argv.includes('--smoke-test');
 const E2E_TEST = process.env.EXAMGUARD_E2E === '1';
