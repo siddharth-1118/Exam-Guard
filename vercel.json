@@ -1,0 +1,5 @@
+{
+  "buildCommand": "pnpm run vercel-build",
+  "outputDirectory": "apps/student-web/.next",
+  "framework": "nextjs"
+}

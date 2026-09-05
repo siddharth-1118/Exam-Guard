@@ -45,21 +45,15 @@ jobs:
       - name: Generate Prisma Client & Build Packages
         run: |
           cd packages/database && npx prisma generate
-          cd ../..
-          pnpm --filter @examguard/types build
-          pnpm --filter @examguard/config build
-          pnpm --filter @examguard/auth build
-          pnpm --filter @examguard/security build
-          pnpm --filter @examguard/database build
 
       - name: Build Electron App (${{ matrix.target }})
-        run: pnpm --filter @examguard/student-desktop build:${{ matrix.target }}
+        run: pnpm --filter @examguard/student-desktop package:${{ matrix.target }}
 
       - name: Create GitHub Release & Upload Artifact
         uses: softprops/action-gh-release@v1
         if: startsWith(github.ref, 'refs/tags/')
         with:
-          files: apps/student-desktop/dist/installer/${{ matrix.artifact }}
+          files: apps/student-desktop/dist/installer/*
           draft: false
           prerelease: true
         env:
