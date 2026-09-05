@@ -102,11 +102,10 @@ jobs:
           pnpm --filter @examguard/auth build
           pnpm --filter @examguard/security build
           pnpm --filter @examguard/database build
-      - name: Wait for Postgres & Deploy Migrations
-        run: |
-          sleep 3
-          cd packages/database && npx prisma migrate deploy
-          cd packages/database && npx prisma db seed
+      - name: Wait for Postgres TCP Port
+        run: node -e 'const net = require("net"); const check = () => { const s = net.connect(5432, "localhost", () => { console.log("Postgres is ready"); s.destroy(); process.exit(0); }); s.on("error", () => setTimeout(check, 500)); }; check();'
+      - run: pnpm --filter @examguard/database db:deploy
+      - run: pnpm --filter @examguard/database db:seed
       - run: pnpm --filter @examguard/api test
 
   media-tests:
@@ -222,8 +221,6 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: cd packages/database && npx prisma generate
-      - name: Wait for Postgres & Deploy Migrations
-        run: |
-          sleep 3
-          cd packages/database && npx prisma migrate deploy
-          cd packages/database && npx prisma migrate reset --force
+      - name: Wait for Postgres TCP Port
+        run: node -e 'const net = require("net"); const check = () => { const s = net.connect(5432, "localhost", () => { console.log("Postgres is ready"); s.destroy(); process.exit(0); }); s.on("error", () => setTimeout(check, 500)); }; check();'
+      - run: pnpm --filter @examguard/database db:deploy
