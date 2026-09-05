@@ -223,13 +223,17 @@ export class MonitoringService {
 
   async pause(user: UserContext, studentId: string, dto: PauseExamDto) {
     const { attempt, exam } = await this.requireAttemptForStudent(user, studentId);
-    if (attempt.status !== 'ACTIVE') {
-      throw new ConflictException(`Cannot pause an attempt in status ${attempt.status}`);
-    }
-    const updated = await this.prisma.examAttempt.update({
-      where: { id: attempt.id },
+    // Atomic guard: only ACTIVE attempts can be paused. If another monitor
+    // terminated/resumed concurrently, this updateMany returns count=0.
+    const result = await this.prisma.examAttempt.updateMany({
+      where: { id: attempt.id, status: 'ACTIVE' },
       data: { status: 'PAUSED', pausedAt: new Date() },
     });
+    if (result.count === 0) {
+      throw new ConflictException(`Cannot pause an attempt in status ${attempt.status} (state changed concurrently)`);
+    }
+    const updated = await this.prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+    if (!updated) throw new ConflictException('Attempt not found after pause');
     await this.recordAction(user, attempt, 'PAUSE', dto.reason, { durationSeconds: dto.durationSeconds });
     await this.audit(user, attempt, 'monitoring.pause', { durationSeconds: dto.durationSeconds, reason: dto.reason });
     this.eventBus.emitStudentPaused(
@@ -251,17 +255,21 @@ export class MonitoringService {
     const deadline = attempt.startedAt!.getTime() + examRow!.durationMinutes * 60_000 + accumulated * 1000;
     const expired = deadline <= Date.now();
 
-    const updated = await this.prisma.examAttempt.update({
-      where: { id: attempt.id },
+    // Atomic guard: only PAUSED attempts can be resumed
+    const result = await this.prisma.examAttempt.updateMany({
+      where: { id: attempt.id, status: 'PAUSED' },
       data: {
         status: expired ? 'AUTO_SUBMITTED' : 'ACTIVE',
         pausedAt: null,
         accumulatedPausedSeconds: accumulated,
-        ...(expired
-          ? { submittedAt: new Date(), autoSubmitted: true }
-          : {}),
+        ...(expired ? { submittedAt: new Date(), autoSubmitted: true } : {}),
       },
     });
+    if (result.count === 0) {
+      throw new ConflictException('Attempt is not paused (state changed concurrently)');
+    }
+    const updated = await this.prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+    if (!updated) throw new ConflictException('Attempt not found after resume');
     await this.recordAction(user, attempt, 'RESUME', dto.reason, { pauseSeconds });
     await this.audit(user, attempt, 'monitoring.resume', { pauseSeconds, reason: dto.reason });
     this.eventBus.emit('student.resumed', { attemptId: attempt.id, expired }, {
@@ -277,10 +285,16 @@ export class MonitoringService {
     if (attempt.status === 'SUBMITTED' || attempt.status === 'AUTO_SUBMITTED') {
       throw new ConflictException('Attempt already submitted; cannot terminate');
     }
-    const updated = await this.prisma.examAttempt.update({
-      where: { id: attempt.id },
+    // Atomic guard: only ACTIVE/PAUSED/DISCONNECTED attempts can be terminated
+    const result = await this.prisma.examAttempt.updateMany({
+      where: { id: attempt.id, status: { in: ['ACTIVE', 'PAUSED', 'DISCONNECTED'] } },
       data: { status: 'TERMINATED', pausedAt: null },
     });
+    if (result.count === 0) {
+      throw new ConflictException(`Cannot terminate attempt in status ${attempt.status} (state changed concurrently)`);
+    }
+    const updated = await this.prisma.examAttempt.findUnique({ where: { id: attempt.id } });
+    if (!updated) throw new ConflictException('Attempt not found after terminate');
     await this.recordAction(user, attempt, 'TERMINATE', dto.reason, null);
     await this.audit(user, attempt, 'monitoring.terminate', { reason: dto.reason });
     // Terminating the exam also ends any live SFU publisher participant.
@@ -411,7 +425,29 @@ export class MonitoringService {
   }
 
   async createAiEvent(user: UserContext, dto: CreateAiEventDto) {
+    if (dto.confidence < 0 || dto.confidence > 1) {
+      throw new BadRequestException('Confidence must be between 0.0 and 1.0');
+    }
     const attempt = await this.findAttemptForEvent(user, dto.attemptId);
+
+    // AI Cooldown / Deduplication: suppress duplicate alerts of same eventType within 5s
+    const fiveSecondsAgo = new Date(Date.now() - 5_000);
+    const recentDuplicate = await this.prisma.aiEvent.findFirst({
+      where: {
+        attemptId: attempt.id,
+        eventType: dto.eventType as never,
+        capturedAt: { gte: fiveSecondsAgo },
+      },
+    });
+
+    if (recentDuplicate) {
+      // Update confidence if higher, but don't emit duplicate alert flood
+      return this.prisma.aiEvent.update({
+        where: { id: recentDuplicate.id },
+        data: { confidence: Math.max(recentDuplicate.confidence, dto.confidence) },
+      });
+    }
+
     const event = await this.prisma.aiEvent.create({
       data: {
         attemptId: attempt.id,
@@ -419,8 +455,6 @@ export class MonitoringService {
         confidence: dto.confidence,
         evidenceRef: dto.evidenceRef ?? null,
         modelVersion: dto.modelVersion ?? null,
-        // detail is derived from the event; keep the row minimal
-
       },
     });
     const risk = await this.recomputeRisk(attempt.id);
@@ -441,10 +475,18 @@ export class MonitoringService {
     const event = await this.prisma.aiEvent.findUnique({ where: { id: eventId }, include: { attempt: true } });
     if (!event) throw new NotFoundException('AI event not found');
     await this.requireAssignedExam(user, event.attempt.examId);
-    return this.prisma.aiEvent.update({
+    const updated = await this.prisma.aiEvent.update({
       where: { id: eventId },
       data: { status, reviewedBy: user.userId, reviewedAt: new Date() },
     });
+
+    await this.audit(user, event.attempt, 'ai.event.reviewed', {
+      eventId,
+      eventType: event.eventType,
+      status,
+    });
+
+    return updated;
   }
 
   // -------------------------------------------------------------------------
