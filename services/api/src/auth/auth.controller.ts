@@ -1,6 +1,7 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
 import { AuthService, type AuthResult } from './auth.service';
+import { MfaService } from './mfa.service';
 import { CurrentUser, Public } from '../common/decorators';
 import type { UserContext } from '../common/types';
 import {
@@ -14,7 +15,10 @@ import {
 
 @Controller('api/v1/auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  constructor(
+    private readonly auth: AuthService,
+    private readonly mfa: MfaService,
+  ) {}
 
   @Public()
   @Post('register')
@@ -67,9 +71,31 @@ export class AuthController {
     return { ok: true };
   }
 
-  @Post('mfa/verify')
+  // ---- Real TOTP MFA endpoints (C39) ----
+
+  @Post('mfa/enroll')
   @HttpCode(HttpStatus.OK)
-  verifyMfa(@Body() _dto: MfaVerifyDto): Promise<{ ok: boolean }> {
-    return this.auth.verifyMfa();
+  async enrollMfa(@CurrentUser() user: UserContext) {
+    return this.mfa.enroll(user.userId);
+  }
+
+  @Post('mfa/verify')
+  @Throttle({ default: { limit: Number(process.env.THROTTLE_MFA_LIMIT ?? 5), ttl: 60_000 } })
+  @HttpCode(HttpStatus.OK)
+  async verifyMfa(@CurrentUser() user: UserContext, @Body() dto: MfaVerifyDto): Promise<{ ok: boolean; method: string }> {
+    const result = await this.mfa.verify(user.userId, dto.token);
+    return { ok: result.verified, method: result.method };
+  }
+
+  @Get('mfa/status')
+  async mfaStatus(@CurrentUser() user: UserContext) {
+    return this.mfa.getStatus(user.userId);
+  }
+
+  @Post('mfa/disable')
+  @HttpCode(HttpStatus.OK)
+  async disableMfa(@CurrentUser() user: UserContext, @Body() dto: MfaVerifyDto): Promise<{ ok: boolean }> {
+    await this.mfa.disable(user.userId, dto.token);
+    return { ok: true };
   }
 }
