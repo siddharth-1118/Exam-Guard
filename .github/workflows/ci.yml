@@ -69,18 +69,18 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
       redis:
         image: redis:7-alpine
         ports:
           - 6379:6379
         options: >-
           --health-cmd "redis-cli ping"
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       APP_ENV: test
       DATABASE_URL: postgresql://examguard:examguard@localhost:5432/examguard_test?schema=public
@@ -102,7 +102,11 @@ jobs:
           pnpm --filter @examguard/auth build
           pnpm --filter @examguard/security build
           pnpm --filter @examguard/database build
-      - run: cd packages/database && npx prisma migrate deploy
+      - name: Wait for Postgres & Deploy Migrations
+        run: |
+          sleep 3
+          cd packages/database && npx prisma migrate deploy
+          cd packages/database && npx prisma db seed
       - run: pnpm --filter @examguard/api test
 
   media-tests:
@@ -204,9 +208,9 @@ jobs:
           - 5432:5432
         options: >-
           --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
     env:
       DATABASE_URL: postgresql://examguard:examguard@localhost:5432/examguard_migration_test?schema=public
     steps:
@@ -218,6 +222,8 @@ jobs:
           cache: 'pnpm'
       - run: pnpm install --frozen-lockfile
       - run: cd packages/database && npx prisma generate
-      - run: cd packages/database && npx prisma migrate deploy
-      - run: cd packages/database && npx prisma db push --force-reset
-      - run: cd packages/database && npx prisma migrate deploy
+      - name: Wait for Postgres & Deploy Migrations
+        run: |
+          sleep 3
+          cd packages/database && npx prisma migrate deploy
+          cd packages/database && npx prisma migrate reset --force
