@@ -106,7 +106,11 @@ export class LocalRecordingStorage extends RecordingStorage {
   }
 
   private resolveKey(key: string): string {
-    if (isAbsolute(key) || key.includes('\u0000')) {
+    // isAbsolute handles POSIX paths (/etc/...) on all platforms.
+    // Additionally reject Windows-style drive letter paths (C:\...) even when
+    // running on Linux where Node's isAbsolute() returns false for them.
+    const windowsDrivePath = /^[A-Za-z]:[/\\]/;
+    if (isAbsolute(key) || windowsDrivePath.test(key) || key.includes('\u0000')) {
       throw new Error('Refusing non-relative storage key');
     }
     const target = resolve(this.rootDir, key);

@@ -89,6 +89,11 @@ describe('LocalRecordingStorage', () => {
   });
 
   it('refuses absolute keys', async () => {
+    // POSIX-absolute path — isAbsolute() returns true on all platforms
+    await expect(storage.putObject('/etc/passwd', Buffer.from('x'))).rejects.toThrow(
+      /non-relative storage key/,
+    );
+    // Windows drive-letter path — must also be rejected cross-platform (CI runs on Linux)
     await expect(storage.putObject('C:\\Windows\\system32\\x', Buffer.from('x'))).rejects.toThrow(
       /non-relative storage key/,
     );
