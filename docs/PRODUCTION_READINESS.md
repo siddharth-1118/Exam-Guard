@@ -53,10 +53,10 @@ This document presents the authoritative technical status, empirical evidence, l
 | **43. Production Security Audit** | **PROVEN** | Auth, API, IDOR, media, recording, desktop, privacy, secrets all verified secure; no hardcoded prod secrets; audit redaction active | MFA config storage needs DB table; no centralized secrets manager |
 | **44. Deployment Documentation** | **PARTIAL** | `docs/DEPLOYMENT.md`, `docs/OPERATIONS.md`, `docs/SECURITY.md`, `docs/INCIDENT_RESPONSE.md`, `docs/MONITORING.md` created | Not validated against real deployment |
 | **45. Final Release Gate** | **PARTIAL** | 40 subsystems evaluated; blockers categorized; Technically Ready vs Deployment Ready vs Commercial Ready distinction made | See detailed matrix below |
-| **46. Containerization / Deployment** | **PARTIAL** | Multi-stage Dockerfiles for API + media; docker-compose.yml for local production topology; .dockerignore; health checks; non-root users | No validated Docker build; no production container registry |
+| **46. Containerization / Deployment** | **PARTIAL** | Multi-stage Dockerfiles for API + media; docker-compose.yml with 4 services; .dockerignore; health checks; non-root users; tini signal handling; FFmpeg in media image | **BLOCKED** — Docker daemon unavailable; static validation only |
 | **47. Database Migration Safety** | **PROVEN** | 6 versioned migrations; `prisma migrate deploy` for production; seed guarded by APP_ENV; no silent schema mutation | Migration validation in CI pipeline |
-| **48. Backup / Restore Foundation** | **PARTIAL** | `scripts/db-backup.sh` with timestamped gzip + SHA-256 checksum; restore procedure documented | No automated backup schedule; no production backup tested; RPO/RTO undefined |
-| **49. CI Pipeline** | **PARTIAL** | GitHub Actions workflow with 8 parallel jobs: install, typecheck, API tests, media tests, desktop tests, security tests, build, migration validation | Not yet validated in GitHub; no integration test jobs |
+| **48. Backup / Restore Foundation** | **PARTIAL** | `scripts/db-backup.sh` with timestamped gzip + SHA-256 checksum; restore procedure documented | **BLOCKED** — pg_dump not installed; backup not tested locally |
+| **49. CI Pipeline** | **PARTIAL** | GitHub Actions workflow with 8 parallel jobs; all equivalent local tests pass 236/236; YAML structurally valid; no remote configured | NOT VALIDATED IN GITHUB (no remote) |
 | **50. Prometheus Metrics** | **PARTIAL** | `/metrics` endpoint with Prometheus exposition format; bounded labels; HTTP request metrics, attempt/media/recording gauges, auth/MFA counters | No Grafana dashboards; no Prometheus server deployed |
 | **51. Alerting Contract** | **PARTIAL** | `docs/MONITORING.md` with CRITICAL/WARNING alert rules, escalation paths, dashboard recommendations | No actual alerting system connected |
 | **53. Docker Build Validation** | **BLOCKED** | Dockerfiles exist; Docker daemon not running | Cannot validate build/runtime without Docker |
@@ -1124,6 +1124,131 @@ Created operational documentation:
 - No debug flags in production code paths
 - No bypass endpoints
 - No TODO security bypasses found
+
+---
+
+## Group 10 — Real Deployment, Backup/Restore & CI Validation (C60–C62)
+
+### C60: Docker Deployment Validation
+
+**Status: BLOCKED**
+
+**Environment**: Docker Desktop service stopped on Windows machine; daemon unreachable.
+
+**Static Audit (what was verified without execution)**:
+
+| Check | Result |
+|---|---|
+| Dockerfiles exist | ✅ API + Media |
+| Multi-stage builds | ✅ Builder + production stages |
+| Non-root user | ✅ examguard:1001 in both |
+| Health checks | ✅ wget to /health (API) and /status (Media) |
+| tini signal handling | ✅ Both Dockerfiles |
+| FFmpeg in media | ✅ `apk add --no-cache tini ffmpeg` |
+| mediasoup native deps | ⚠️ Not explicitly installed in media Dockerfile (relies on pnpm rebuild) |
+| Prisma generation | ✅ `npx prisma generate` in API builder stage |
+| .dockerignore | ✅ Excludes node_modules, .git, docs, scripts, apps/ | 
+| docker-compose.yml | ✅ 4 services (postgres, redis, api, media) with health checks |
+| Seed safety | ✅ Seed is explicit `pnpm db:seed`, never runs at startup |
+| Exposed ports | ✅ 4000 (API), 4010+40000-40100/udp (Media) |
+| Persistent volumes | ✅ postgres_data for PostgreSQL |
+
+**docker-compose.yml secrets**: Placeholder values (`production-jwt-secret-change-me-in-real-deployment`, `examguard-local-dev-only`, `examguard-dev-sfu-admin-key`) are for local dev topology only. Production must override via env vars or secrets management.
+
+**Dockerfile security**: No production secrets copied into images. No credentials in COPY layers.
+
+**What requires real Docker validation**:
+- Actual `docker build` success (especially mediasoup native compilation)
+- Container startup and health check passing
+- FFmpeg binary availability in media container
+- Graceful SIGTERM shutdown
+- Non-root permission verification at runtime
+
+### C61: Database Backup / Restore
+
+**Status: BLOCKED**
+
+**Environment**: `pg_dump`, `pg_restore`, `psql` not installed on current machine. Docker daemon unavailable (would need containerized PostgreSQL).
+
+**Static Audit**:
+
+| Check | Result |
+|---|---|
+| Backup script exists | ✅ `scripts/db-backup.sh` |
+| pg_dump format | ✅ Plain SQL via pipe |
+| Compression | ✅ gzip |
+| Timestamp naming | ✅ `examguard_YYYYMMDD_HHMMSS.sql.gz` |
+| Checksum | ✅ SHA-256 via `sha256sum` |
+| Error handling | ✅ `set -euo pipefail` |
+| DATABASE_URL validation | ✅ Exits if unset |
+| Password in process args | ✅ Pipe-based (avoids command-line leak) |
+
+**What requires real validation**:
+- Actual backup creation with real data
+- SHA-256 checksum verification
+- pg_restore against empty database
+- Row count verification post-restore
+- Prisma connection post-restore
+- Recovery time measurement (RPO/RTO)
+
+**Restore procedure** (documented but not tested):
+```bash
+# Decompress and restore
+gunzip -c backup.sql.gz | psql $DATABASE_URL
+# Or via pg_restore for custom format
+```
+
+### C62: CI Pipeline Validation
+
+**Status: PARTIAL**
+
+**Environment**: No GitHub remote configured; local validation only.
+
+**Workflow Audit** (`.github/workflows/ci.yml`, 199 lines, 8 jobs):
+
+| Check | Result |
+|---|---|
+| YAML validity | ✅ Structurally valid (parsed via Node) |
+| Trigger | ✅ push/PR to main/master |
+| Node version pinned | ✅ Node 20 |
+| pnpm version pinned | ✅ pnpm 9 |
+| Frozen lockfile | ✅ `pnpm install --frozen-lockfile` |
+| Dependency caching | ✅ `actions/setup-node` with `cache: 'pnpm'` |
+| API tests (PostgreSQL+Redis services) | ✅ Service containers defined |
+| Media tests | ✅ |
+| Desktop tests | ✅ |
+| Security tests | ✅ |
+| Build job | ✅ Waits for all test jobs |
+| Migration validation | ✅ Fresh DB + force-reset + re-migrate |
+
+**CI Security Review**:
+
+| Item | Finding |
+|---|---|
+| Hardcoded JWT_SECRET | `test-secret-for-ci-only` — acceptable for ephemeral CI containers |
+| Hardcoded DB password | `examguard:examguard` — acceptable for CI PostgreSQL service container |
+| No AWS credentials | ✅ |
+| No signing certificates | ✅ |
+| No production secrets | ✅ |
+
+**Local CI-equivalent execution**:
+
+| Step | Command | Result |
+|---|---|---|
+| Install | `pnpm install --frozen-lockfile` | ✅ |
+| API typecheck | `pnpm --filter @examguard/api typecheck` | ✅ clean |
+| Media typecheck | `pnpm --filter @examguard/media typecheck` | ✅ clean |
+| API tests | `npx jest --forceExit` | ✅ 110/110 |
+| Media tests | `npx jest --forceExit` | ✅ 43/43 + 6 skipped |
+| Desktop tests | `npx jest --forceExit` | ✅ 58/58 |
+| Security tests | `npx jest --forceExit` | ✅ 25/25 |
+
+**Missing from CI**:
+- No `pnpm build` step in CI workflow (the build job exists but typecheck precedes it)
+- No lint step (project may not have a linter configured)
+- No Docker image build job (optional/integration)
+
+**Not validated**: Actual GitHub Actions execution (no remote configured).
 
 ---
 
