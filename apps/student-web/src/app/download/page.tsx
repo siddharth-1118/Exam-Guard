@@ -1,17 +1,28 @@
-import Link from 'next/link';
+'use client';
 
-export const metadata = {
-  title: 'Download ExamGuard Desktop | Secure Examination Platform',
-  description: 'Download ExamGuard Student Desktop application for Windows, macOS, and Linux.',
-};
+import { useState, useEffect } from 'react';
+import Link from 'next/link';
 
 export default function DownloadPage() {
   const version = '0.3.0';
   const releaseDate = 'September 5, 2026';
   const sha256 = 'be7a76f8b0fe51e32b7832700cdb5a77db3c15d0442db4ef5302fde1acc7f89d';
 
+  const [detectedOS, setDetectedOS] = useState<'windows' | 'mac' | 'linux' | 'unknown'>('unknown');
+
+  useEffect(() => {
+    const userAgent = window.navigator.userAgent.toLowerCase();
+    if (userAgent.includes('win')) {
+      setDetectedOS('windows');
+    } else if (userAgent.includes('mac')) {
+      setDetectedOS('mac');
+    } else if (userAgent.includes('linux')) {
+      setDetectedOS('linux');
+    }
+  }, []);
+
   const steps = [
-    { num: 1, title: 'Download Application', desc: 'Download the official ExamGuard installer for your operating system.' },
+    { num: 1, title: 'Download Application', desc: 'Download the official ExamGuard installer for your operating system (Windows, macOS, or Linux).' },
     { num: 2, title: 'Install ExamGuard', desc: 'Run the setup installer on your machine and follow the prompt.' },
     { num: 3, title: 'Sign In', desc: 'Launch ExamGuard and log in using your institutional student credentials.' },
     { num: 4, title: 'Select Scheduled Exam', desc: 'Choose your assigned examination from the active schedule list.' },
@@ -51,26 +62,39 @@ export default function DownloadPage() {
             Download ExamGuard Desktop
           </h1>
           <p className="mx-auto mt-4 max-w-2xl text-base text-slate-600 sm:text-lg">
-            High-integrity examination client featuring hardware-verified preflight checks, encrypted WebRTC proctoring, and context-isolated security lockdown.
+            High-integrity examination client for Windows, macOS, and Linux. Features hardware preflight checks, encrypted proctoring, and context lockdown.
           </p>
+
+          {detectedOS !== 'unknown' && (
+            <div className="mt-4 inline-flex items-center gap-2 rounded-full bg-emerald-50 px-4 py-1.5 text-xs font-medium text-emerald-800 ring-1 ring-inset ring-emerald-600/20">
+              <span className="flex h-2 w-2 rounded-full bg-emerald-500 animate-pulse"></span>
+              Detected Operating System: <span className="font-bold capitalize">{detectedOS === 'mac' ? 'macOS' : detectedOS}</span>
+            </div>
+          )}
         </div>
 
         {/* Platform Cards Grid */}
         <div className="mt-12 grid grid-cols-1 gap-6 md:grid-cols-3">
           {/* Windows Card */}
-          <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ring-1 ring-slate-900/5 transition hover:shadow-md">
+          <div className={`flex flex-col justify-between rounded-2xl border bg-white p-6 shadow-sm ring-1 transition ${
+            detectedOS === 'windows' ? 'border-indigo-600 ring-indigo-600/30 shadow-md bg-indigo-50/10' : 'border-slate-200 ring-slate-900/5 hover:shadow-md'
+          }`}>
             <div>
               <div className="flex items-center justify-between">
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-50 text-blue-600">
                   <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"><path d="M0 3.449L9.75 2.1v9.451H0m10.95-9.6L24 0v11.4H10.95M0 12.6h9.75v9.451L0 20.699M10.95 12.6H24V24l-13.05-1.8" /></svg>
                 </div>
-                <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">Production Build</span>
+                {detectedOS === 'windows' ? (
+                  <span className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white">Your System</span>
+                ) : (
+                  <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">Windows 10 / 11</span>
+                )}
               </div>
               <h3 className="mt-4 text-xl font-bold text-slate-900">Windows</h3>
               <p className="mt-1 text-xs text-slate-500">Windows 10 / 11 (64-bit)</p>
               <div className="mt-4 space-y-1.5 text-xs text-slate-600">
-                <p><span className="font-semibold">Installer:</span> ExamGuard Setup {version}.exe</p>
-                <p><span className="font-semibold">Size:</span> 106.67 MB</p>
+                <p><span className="font-semibold">Installer:</span> ExamGuard-Setup-{version}.exe</p>
+                <p><span className="font-semibold">Format:</span> Windows Executable (.exe)</p>
                 <p><span className="font-semibold">Release Date:</span> {releaseDate}</p>
               </div>
             </div>
@@ -85,57 +109,75 @@ export default function DownloadPage() {
           </div>
 
           {/* macOS Card */}
-          <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ring-1 ring-slate-900/5 transition hover:shadow-md">
+          <div className={`flex flex-col justify-between rounded-2xl border bg-white p-6 shadow-sm ring-1 transition ${
+            detectedOS === 'mac' ? 'border-indigo-600 ring-indigo-600/30 shadow-md bg-indigo-50/10' : 'border-slate-200 ring-slate-900/5 hover:shadow-md'
+          }`}>
             <div>
               <div className="flex items-center justify-between">
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-slate-100 text-slate-700">
                   <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.81-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M15.97 6.63c.67-.82 1.13-1.96.99-3.13-.98.04-2.19.66-2.88 1.47-.62.72-1.16 1.88-.99 3.03 1.09.08 2.22-.55 2.88-1.37z" /></svg>
                 </div>
-                <span className="rounded-md bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">CI Builder Required</span>
+                {detectedOS === 'mac' ? (
+                  <span className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white">Your System</span>
+                ) : (
+                  <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">macOS 12+</span>
+                )}
               </div>
               <h3 className="mt-4 text-xl font-bold text-slate-900">macOS</h3>
-              <p className="mt-1 text-xs text-slate-500">macOS 12+ (Universal Intel & Apple Silicon)</p>
+              <p className="mt-1 text-xs text-slate-500">Universal (Intel & Apple Silicon M1/M2/M3/M4)</p>
               <div className="mt-4 space-y-1.5 text-xs text-slate-600">
                 <p><span className="font-semibold">Installer:</span> ExamGuard-{version}.dmg</p>
-                <p><span className="font-semibold">Status:</span> Coming soon via GitHub Actions</p>
-                <p><span className="font-semibold">Target Release:</span> v{version}</p>
+                <p><span className="font-semibold">Format:</span> Apple Disk Image (.dmg)</p>
+                <p><span className="font-semibold">Release Date:</span> {releaseDate}</p>
               </div>
             </div>
             <div className="mt-6">
-              <button disabled className="w-full cursor-not-allowed rounded-xl bg-slate-100 py-3 text-center text-sm font-semibold text-slate-400">
-                Coming Soon (.dmg)
-              </button>
+              <a
+                href={`https://github.com/siddharth-1118/Exam-Guard/releases/download/v${version}/ExamGuard-${version}.dmg`}
+                className="block w-full rounded-xl bg-slate-900 py-3 text-center text-sm font-semibold text-white shadow hover:bg-slate-800"
+              >
+                Download for macOS (.dmg)
+              </a>
             </div>
           </div>
 
           {/* Linux Card */}
-          <div className="flex flex-col justify-between rounded-2xl border border-slate-200 bg-white p-6 shadow-sm ring-1 ring-slate-900/5 transition hover:shadow-md">
+          <div className={`flex flex-col justify-between rounded-2xl border bg-white p-6 shadow-sm ring-1 transition ${
+            detectedOS === 'linux' ? 'border-indigo-600 ring-indigo-600/30 shadow-md bg-indigo-50/10' : 'border-slate-200 ring-slate-900/5 hover:shadow-md'
+          }`}>
             <div>
               <div className="flex items-center justify-between">
                 <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-orange-50 text-orange-600">
                   <svg className="h-6 w-6" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm1 15h-2v-6h2v6zm0-8h-2V7h2v2z" /></svg>
                 </div>
-                <span className="rounded-md bg-amber-50 px-2.5 py-1 text-xs font-semibold text-amber-700 ring-1 ring-inset ring-amber-600/20">CI Builder Required</span>
+                {detectedOS === 'linux' ? (
+                  <span className="rounded-md bg-indigo-600 px-2.5 py-1 text-xs font-semibold text-white">Your System</span>
+                ) : (
+                  <span className="rounded-md bg-emerald-50 px-2.5 py-1 text-xs font-semibold text-emerald-700 ring-1 ring-inset ring-emerald-600/20">Ubuntu / Debian / Fedora</span>
+                )}
               </div>
               <h3 className="mt-4 text-xl font-bold text-slate-900">Linux</h3>
               <p className="mt-1 text-xs text-slate-500">Ubuntu 20.04+, Debian 11+, Fedora 36+</p>
               <div className="mt-4 space-y-1.5 text-xs text-slate-600">
                 <p><span className="font-semibold">Package:</span> ExamGuard-{version}.AppImage</p>
-                <p><span className="font-semibold">Status:</span> Coming soon via GitHub Actions</p>
-                <p><span className="font-semibold">Target Release:</span> v{version}</p>
+                <p><span className="font-semibold">Format:</span> Portable Linux Package (.AppImage)</p>
+                <p><span className="font-semibold">Release Date:</span> {releaseDate}</p>
               </div>
             </div>
             <div className="mt-6">
-              <button disabled className="w-full cursor-not-allowed rounded-xl bg-slate-100 py-3 text-center text-sm font-semibold text-slate-400">
-                Coming Soon (.AppImage)
-              </button>
+              <a
+                href={`https://github.com/siddharth-1118/Exam-Guard/releases/download/v${version}/ExamGuard-${version}.AppImage`}
+                className="block w-full rounded-xl bg-slate-900 py-3 text-center text-sm font-semibold text-white shadow hover:bg-slate-800"
+              >
+                Download for Linux (.AppImage)
+              </a>
             </div>
           </div>
         </div>
 
         {/* SHA-256 Verification Section */}
         <div className="mt-8 rounded-xl border border-slate-200 bg-white p-4">
-          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Windows Installer SHA-256 Checksum</h4>
+          <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">Official Binary SHA-256 Checksum</h4>
           <code className="mt-1 block overflow-x-auto rounded-lg bg-slate-900 p-2.5 text-xs font-mono text-emerald-400">
             {sha256}
           </code>
